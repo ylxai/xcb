@@ -29,7 +29,7 @@ variables:
 test-miner:
   image: ylxai/kube-xcb:latest
   tags:
-    - puzl-ubuntu-latest
+    - run
   script:
     - 'echo "=== Miner test: jalan 120 detik ==="'
     - 'timeout 120 ./miner-saya || true'
