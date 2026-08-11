@@ -23,8 +23,10 @@ variables:
   # RandomY: wajib FULL_MEM=0 di container (LARGE_PAGES crash tanpa hugepages)
   FULL_MEM: "0"
   LARGE_PAGES: "0"
-  # Max 4 thread di job ini (sesuaikan budget; CPU ditagih per detik)
-  THREADS: "4"
+  # Threads menentukan pemakaian CPU pod. Runner Puzl dropContainerResourceLimits=true
+  # (pod tanpa limits/requests) -> CPU pod = threads miner. 8 thread ~ 8 core terpakai.
+  # Sesuaikan budget: CPU ditagih per CPU-second.
+  THREADS: "8"
 
 # --- JOB 1: Test singkat (2 menit) - buktikan miner jalan ---
 test-miner:
@@ -42,12 +44,18 @@ test-miner:
     paths:
       - "*.log"
 
-# --- JOB 2: Mining panjang (uncomment kalau mau full run) ---
-# mine-full:
-#   image: ylxai/kube-xcb:latest
-#   tags:
-#     - PASTE_TAG_RUNNER_DISINI   # <-- GANTI
-#   script:
-#     - echo "=== Mining dimulai (THREADS=$THREADS, pool=$POOL) ==="
-#     - ./miner-saya
-#   timeout: 3h
+# --- JOB 2: Mining panjang (1 jam, 8 thread) ---
+mine-full:
+  image: ylxai/kube-xcb:latest
+  tags:
+    - run
+  script:
+    - 'echo "=== Mining 1 jam dimulai (THREADS=$THREADS pool=$POOL) ==="'
+    - 'timeout 3600 /miner/miner-saya || true'
+    - 'echo "=== Mining selesai (1 jam) ==="'
+  timeout: 2h
+  artifacts:
+    when: always
+    expire_in: 1 day
+    paths:
+      - "*.log"
