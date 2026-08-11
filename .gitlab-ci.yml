@@ -25,7 +25,7 @@ variables:
   # Max 4 thread di job ini (sesuaikan budget; CPU ditagih per detik)
   THREADS: "4"
 
-# --- JOB 1: Test singkat (2 menit) — buktikan miner jalan ---
+# --- JOB 1: Test singkat (2 menit) - buktikan miner jalan ---
 test-miner:
   image: ylxai/kube-xcb:latest
   tags:
@@ -33,7 +33,7 @@ test-miner:
   script:
     - echo "=== Miner test: jalan 120 detik ==="
     - timeout 120 ./miner-saya || true
-    - echo "=== Test selesai — logs di atas adalah bukti mining jalan ==="
+    - echo "=== Test selesai - logs di atas adalah bukti mining jalan ==="
   timeout: 5m
   artifacts:
     when: always
