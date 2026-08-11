@@ -31,9 +31,9 @@ test-miner:
   tags:
     - puzl-ubuntu-latest
   script:
-    - echo "=== Miner test: jalan 120 detik ==="
-    - timeout 120 ./miner-saya || true
-    - echo "=== Test selesai - logs di atas adalah bukti mining jalan ==="
+    - 'echo "=== Miner test: jalan 120 detik ==="'
+    - 'timeout 120 ./miner-saya || true'
+    - 'echo "=== Test selesai - logs di atas adalah bukti mining jalan ==="'
   timeout: 5m
   artifacts:
     when: always
