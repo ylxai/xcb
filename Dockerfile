@@ -47,5 +47,6 @@ ENV POOL=sg.catchthatrabbit.com:8008
 ENV WORKER=pool
 ENV THREADS=
 ENV FULL_MEM=
+ENV LARGE_PAGES=0
 
 ENTRYPOINT ["./miner-saya"]

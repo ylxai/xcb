@@ -98,11 +98,19 @@ MinerConfig Config::parse(int argc, char* argv[]) {
     const char* envWorker = getenv("WORKER");
     const char* envThreads = getenv("THREADS");
     const char* envFullMem = getenv("FULL_MEM");
+    const char* envLargePages = getenv("LARGE_PAGES");
     
     // FULL_MEM defaults to true; set "0" or "false" to disable
     if (envFullMem) {
         std::string fm = envFullMem;
         cfg.fullMem = (fm != "0" && fm != "false" && fm != "no");
+    }
+    
+    // LARGE_PAGES defaults to true; set "0" or "false" to disable
+    // (containers without hugepages/mlock must disable or cache alloc fails)
+    if (envLargePages) {
+        std::string lp = envLargePages;
+        cfg.largePages = (lp != "0" && lp != "false" && lp != "no");
     }
     
     if (envWallet && envPool) {

@@ -22,6 +22,7 @@ variables:
   WORKER: "puzl-gitlab"
   # RandomY: wajib FULL_MEM=0 di container (LARGE_PAGES crash tanpa hugepages)
   FULL_MEM: "0"
+  LARGE_PAGES: "0"
   # Max 4 thread di job ini (sesuaikan budget; CPU ditagih per detik)
   THREADS: "4"
 
