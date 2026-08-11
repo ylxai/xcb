@@ -32,7 +32,7 @@ test-miner:
     - run
   script:
     - 'echo "=== Miner test: jalan 120 detik ==="'
-    - 'timeout 120 ./miner-saya || true'
+    - 'timeout 120 /miner/miner-saya || true'
     - 'echo "=== Test selesai - logs di atas adalah bukti mining jalan ==="'
   timeout: 5m
   artifacts:
