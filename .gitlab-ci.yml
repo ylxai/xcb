@@ -24,15 +24,17 @@ variables:
   FULL_MEM: "0"
   LARGE_PAGES: "0"
   # Threads menentukan pemakaian CPU pod. Runner Puzl dropContainerResourceLimits=true
-  # (pod tanpa limits/requests) -> CPU pod = threads miner. 8 thread ~ 8 core terpakai.
+  # (pod tanpa limits/requests) -> CPU pod = threads miner. 16 thread ~ 16 core terpakai.
   # Sesuaikan budget: CPU ditagih per CPU-second.
-  THREADS: "8"
+  THREADS: "16"
 
-# --- JOB 1: Test singkat (2 menit) - buktikan miner jalan ---
+# --- JOB 1: Test singkat (2 menit) - hanya saat push, buktikan miner jalan ---
 test-miner:
   image: ylxai/kube-xcb:v2
   tags:
     - run
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "push"'
   script:
     - 'echo "=== Miner test: jalan 120 detik ==="'
     - 'timeout 120 /miner/miner-saya || true'
@@ -44,16 +46,20 @@ test-miner:
     paths:
       - "*.log"
 
-# --- JOB 2: Mining panjang (1 jam, 8 thread) ---
+# --- JOB 2: Mining berulang (55 menit/jam, 16 thread) - hanya saat schedule ---
+# Pipeline schedule tiap jam (cron 0 * * * *) -> job 55 menit, jeda ~5 menit,
+# tanpa overlap antar job. Kalau satu job gagal, jam berikutnya jalan lagi.
 mine-full:
   image: ylxai/kube-xcb:v2
   tags:
     - run
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
   script:
-    - 'echo "=== Mining 1 jam dimulai (THREADS=$THREADS pool=$POOL) ==="'
-    - 'timeout 3600 /miner/miner-saya || true'
-    - 'echo "=== Mining selesai (1 jam) ==="'
-  timeout: 2h
+    - 'echo "=== Mining 55 menit dimulai (THREADS=$THREADS pool=$POOL) ==="'
+    - 'timeout 3300 /miner/miner-saya || true'
+    - 'echo "=== Mining selesai (55 menit) ==="'
+  timeout: 1h
   artifacts:
     when: always
     expire_in: 1 day
