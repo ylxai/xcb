@@ -1,0 +1,70 @@
+# Deployment minimal untuk miner-saya (kube-xcb) di Kubernetes
+# Prasyarat:
+#   - Image sudah di-push ke registry yang bisa diakses cluster
+#   - FULL_MEM=0 (light mode) — full mem butuh hugepages yang jarang ada di managed k8s
+#   - THREADS WAJIB di-set = limits.cpu (default di code = nproc NODE, bukan limit pod!)
+#   - Node harus punya AES-NI (hampir semua cloud node) + AVX2 (build pakai -march=x86-64-v3)
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: xcb-miner
+  namespace: mining
+  labels:
+    app: xcb-miner
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: xcb-miner
+  template:
+    metadata:
+      labels:
+        app: xcb-miner
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: miner
+          image: ylxai/kube-xcb:latest   # Docker Hub multi-arch (linux/amd64, linux/arm64)
+          imagePullPolicy: IfNotPresent
+          env:
+            # WAJIB: light mode (full mem crash di container tanpa hugepages)
+            - name: FULL_MEM
+              value: "0"
+            # WAJIB: thread count harus match limits.cpu
+            - name: THREADS
+              value: "2"
+            - name: WALLET
+              valueFrom:
+                secretKeyRef:
+                  name: xcb-wallet
+                  key: wallet
+            - name: POOL
+              value: "sg.catchthatrabbit.com:8008"
+            - name: WORKER
+              value: "k8s-pod"
+          resources:
+            requests:
+              cpu: "2"
+              memory: 384Mi
+            limits:
+              cpu: "2"      # harus >= THREADS
+              memory: 512Mi # light mode: cache 256MB + overhead
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+---
+# Wallet disimpan sebagai Secret, bukan di image ENV default
+apiVersion: v1
+kind: Secret
+metadata:
+  name: xcb-wallet
+  namespace: mining
+type: Opaque
+stringData:
+  wallet: "cb23d6d8557e776f5ff9ab6a7fb7f59a3d385245fa7a"  # ganti sesuai kebutuhan

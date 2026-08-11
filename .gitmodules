@@ -1,0 +1,3 @@
+[submodule "external/RandomY"]
+	path = external/RandomY
+	url = https://github.com/core-coin/RandomY.git

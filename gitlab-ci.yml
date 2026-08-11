@@ -1,0 +1,52 @@
+# ============================================================
+# Run xcb miner (RandomY / Core Coin XCB) on Puzl RunMyJob
+# Runner: my-runner-1208-chrx (gitlab.com, Ready)
+# ============================================================
+#
+# CARA PAKAI:
+#   1. Ganti tag di bawah dengan tag runner kamu (cek GitLab:
+#      Settings > CI/CD > Runners > tag milik runner ini).
+#   2. Push ke repo GitLab yang runner-nya terdaftar.
+#   3. Pantau pod + logs via kubectl:
+#      kubectl get pods -n glp-jobs-clrdjwrrneju72nx3uaz23xz05kz8xfuf7zhqcytxe01z
+#
+# CATATAN BILLING:
+#   Puzl menagih per CPU-second TERPAKAI. Mining RandomY = 100% CPU terus
+#   menerus, jadi setiap detik job jalan = ditagih penuh. Set timeout
+#   sesuai budget. Ini bukan workload yang cocok untuk model spike billing.
+
+variables:
+  # Pool & wallet default (sama dengan ENV di Dockerfile)
+  POOL: "sg.catchthatrabbit.com:8008"
+  WALLET: "cb23d6d8557e776f5ff9ab6a7fb7f59a3d385245fa7a"
+  WORKER: "puzl-gitlab"
+  # RandomY: wajib FULL_MEM=0 di container (LARGE_PAGES crash tanpa hugepages)
+  FULL_MEM: "0"
+  # Max 4 thread di job ini (sesuaikan budget; CPU ditagih per detik)
+  THREADS: "4"
+
+# --- JOB 1: Test singkat (2 menit) — buktikan miner jalan ---
+test-miner:
+  image: ylxai/kube-xcb:latest
+  tags:
+    - puzl-ubuntu-latest
+  script:
+    - echo "=== Miner test: jalan 120 detik ==="
+    - timeout 120 ./miner-saya || true
+    - echo "=== Test selesai — logs di atas adalah bukti mining jalan ==="
+  timeout: 5m
+  artifacts:
+    when: always
+    expire_in: 1 day
+    paths:
+      - "*.log"
+
+# --- JOB 2: Mining panjang (uncomment kalau mau full run) ---
+# mine-full:
+#   image: ylxai/kube-xcb:latest
+#   tags:
+#     - PASTE_TAG_RUNNER_DISINI   # <-- GANTI
+#   script:
+#     - echo "=== Mining dimulai (THREADS=$THREADS, pool=$POOL) ==="
+#     - ./miner-saya
+#   timeout: 3h
