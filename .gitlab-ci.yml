@@ -30,7 +30,7 @@ variables:
 
 # --- JOB 1: Test singkat (2 menit) - buktikan miner jalan ---
 test-miner:
-  image: ylxai/kube-xcb:latest
+  image: ylxai/kube-xcb:v2
   tags:
     - run
   script:
@@ -46,7 +46,7 @@ test-miner:
 
 # --- JOB 2: Mining panjang (1 jam, 8 thread) ---
 mine-full:
-  image: ylxai/kube-xcb:latest
+  image: ylxai/kube-xcb:v2
   tags:
     - run
   script:
