@@ -101,14 +101,14 @@ MinerConfig Config::parse(int argc, char* argv[]) {
     const char* envLargePages = getenv("LARGE_PAGES");
     
     // FULL_MEM defaults to true; set "0" or "false" to disable
-    if (envFullMem) {
+    if (envFullMem && envFullMem[0] != '\0') {
         std::string fm = envFullMem;
         cfg.fullMem = (fm != "0" && fm != "false" && fm != "no");
     }
     
     // LARGE_PAGES defaults to true; set "0" or "false" to disable
     // (containers without hugepages/mlock must disable or cache alloc fails)
-    if (envLargePages) {
+    if (envLargePages && envLargePages[0] != '\0') {
         std::string lp = envLargePages;
         cfg.largePages = (lp != "0" && lp != "false" && lp != "no");
     }
@@ -127,7 +127,10 @@ MinerConfig Config::parse(int argc, char* argv[]) {
         p.wallet = envWallet;
         p.worker = envWorker ? envWorker : "worker";
         cfg.pools.push_back(p);
-        if (envThreads) cfg.threads = std::stoul(envThreads);
+        if (envThreads && envThreads[0] != '\0') cfg.threads = std::stoul(envThreads);
+        // Default threads = CPU cores (same as file/CLI path)
+        if (cfg.threads <= 0)
+            cfg.threads = std::max(1, static_cast<int>(sysconf(_SC_NPROCESSORS_ONLN)));
         std::cout << "[Config] Using env: POOL=" << envPool << " WALLET=" << envWallet << std::endl;
         return cfg;  // Skip file parsing if env vars present
     }

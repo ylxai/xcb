@@ -13,7 +13,7 @@ struct PoolConfig {
 
 struct MinerConfig {
     std::vector<PoolConfig> pools;
-    int threads = 1;
+    int threads = 0;   // 0 = auto (CPU cores)
     bool useJIT = true;
     bool fullMem = true;
     bool hardAES = true;

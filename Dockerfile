@@ -14,6 +14,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /build
 COPY . .
 
+# Init submodule (context harus berisi .gitmodules + .git dari submodule)
+RUN git submodule update --init --recursive
+
 RUN mkdir -p build && cd build && \
     cmake .. -DCMAKE_BUILD_TYPE=Release && \
     make -j$(nproc)
@@ -26,7 +29,6 @@ FROM ubuntu:24.04
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     libssl3 \
-    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user
@@ -36,6 +38,9 @@ WORKDIR /miner
 
 # Copy binary from builder
 COPY --from=builder /build/build/miner-saya .
+
+# Fallback config (multi-server failover) kalau env vars di-unset
+COPY pool.cfg .
 
 RUN chown -R miner:miner /miner
 

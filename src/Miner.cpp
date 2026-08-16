@@ -43,6 +43,12 @@ void Miner::start(const MinerConfig& cfg) {
     std::cout << "[Miner] Starting with " << cfg.threads << " threads" << std::endl;
     
     m_numThreads = cfg.threads;
+
+    // Verbose share logging? (LOG_SHARES=0/false default = quiet)
+    const char* envLog = getenv("LOG_SHARES");
+    m_verboseShares = (envLog && envLog[0] != '\0'
+        && std::string(envLog) != "0" && std::string(envLog) != "false"
+        && std::string(envLog) != "no");
     
     // --- RandomY flags ---
     m_flags = randomx_get_flags();
@@ -191,7 +197,8 @@ void Miner::onNewJob(const Job& job) {
 void Miner::onShareResult(bool accepted, const std::string& msg) {
     if (accepted) {
         m_acceptedShares++;
-        std::cout << "[Miner] ✅ Share ACCEPTED (#" << m_acceptedShares << ")" << std::endl;
+        if (m_verboseShares || m_acceptedShares % 50 == 0)
+            std::cout << "[Miner] ✅ Share ACCEPTED (#" << m_acceptedShares << ")" << std::endl;
     } else {
         m_rejectedShares++;
         if (m_rejectedShares <= 5 || m_rejectedShares % 10 == 0)
@@ -283,10 +290,11 @@ void Miner::workerLoop(Worker* w) {
                     reinterpret_cast<const uint8_t*>(&nonceBE), 8);
                 std::string mixHex = "0x" + bytes_to_hex(hashout, 32);
                 
-                std::cout << "\n[Worker " << w->index << "] ⭐ Share found!"
-                          << " nonce=" << nonceHex
-                          << " hash=" << bytes_to_hex(hashout, 12) << "..."
-                          << std::endl;
+                if (m_verboseShares)
+                    std::cout << "\n[Worker " << w->index << "] ⭐ Share found!"
+                              << " nonce=" << nonceHex
+                              << " hash=" << bytes_to_hex(hashout, 12) << "..."
+                              << std::endl;
 
                 if (m_client && m_client->isConnected()) {
                     m_client->submitShare(m_currentHeaderHex, nonceHex, mixHex);

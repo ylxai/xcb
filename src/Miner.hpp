@@ -63,4 +63,5 @@ private:
     // Control
     std::atomic<bool> m_running{false};
     std::unique_ptr<StratumClient> m_client;
+    bool m_verboseShares = false;   // LOG_SHARES=1 -> print setiap share
 };
