@@ -1,9 +1,9 @@
 #include "Miner.hpp"
 #include <iostream>
 #include <fstream>
+#include <sstream>
 #include <cstring>
 #include <algorithm>
-#include <dirent.h>
 #include <pthread.h>
 #include <unistd.h>
 #include <sys/resource.h>
@@ -67,33 +67,30 @@ void Miner::start(const MinerConfig& cfg) {
         m_flags = static_cast<randomx_flags>(m_flags & ~RANDOMX_FLAG_JIT);
     m_flags = static_cast<randomx_flags>(m_flags | RANDOMX_FLAG_HARD_AES);
 
-    // --- Auto-detect hugepages (item 6) ---
+    // --- Auto-detect hugepages ---
     // Kalau cfg.largePages=true tapi kernel tak menyediakan hugepages
     // (umumnya di container/k8s tanpa privileged), alloc cache bakal gagal.
-    // Deteksi /sys/kernel/mm/hugepages/*/nr_free, auto-disable kalau 0.
+    // Deteksi /proc/meminfo (terlihat di dalam container, sysfs di-mask
+    // Docker/k8s), set flag kalau tersedia, auto-disable kalau 0.
     if (cfg.largePages) {
-        int freeHuge = 0;
+        long freeHuge = -1;
         {
-            DIR* d = opendir("/sys/kernel/mm/hugepages");
-            if (d) {
-                struct dirent* e;
-                while ((e = readdir(d))) {
-                    if (strncmp(e->d_name, "hugepages-", 10) == 0) {
-                        std::string p = std::string("/sys/kernel/mm/hugepages/") +
-                                        e->d_name + "/nr_free";
-                        std::ifstream f(p);
-                        long n = 0;
-                        if (f >> n && n > 0) freeHuge = (int)n;
-                    }
+            std::ifstream f("/proc/meminfo");
+            std::string line;
+            while (std::getline(f, line)) {
+                if (line.rfind("HugePages_Free:", 0) == 0) {
+                    std::istringstream iss(line.substr(15));
+                    iss >> freeHuge;
                 }
-                closedir(d);
             }
         }
         if (freeHuge <= 0) {
             m_flags = static_cast<randomx_flags>(m_flags & ~RANDOMX_FLAG_LARGE_PAGES);
-            std::cerr << "[Miner] No free hugepages available — "
+            std::cerr << "[Miner] No free hugepages available (free=" << freeHuge << ") — "
                       << "auto-disabling LARGE_PAGES (set vm.nr_hugepages for boost)"
                       << std::endl;
+        } else {
+            m_flags = static_cast<randomx_flags>(m_flags | RANDOMX_FLAG_LARGE_PAGES);
         }
     } else {
         m_flags = static_cast<randomx_flags>(m_flags & ~RANDOMX_FLAG_LARGE_PAGES);
