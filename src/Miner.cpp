@@ -95,7 +95,17 @@ void Miner::start(const MinerConfig& cfg) {
     } else {
         m_flags = static_cast<randomx_flags>(m_flags & ~RANDOMX_FLAG_LARGE_PAGES);
     }
-    
+
+    // --- Report RandomY modes (sama seperti CoreMiner official) ---
+    if (m_flags & RANDOMX_FLAG_LARGE_PAGES)
+        std::cout << "[Miner] RandomY large pages mode is enabled" << std::endl;
+    if (m_flags & RANDOMX_FLAG_HARD_AES)
+        std::cout << "[Miner] RandomY hard aes mode is enabled" << std::endl;
+    if (m_flags & RANDOMX_FLAG_FULL_MEM)
+        std::cout << "[Miner] RandomY full mem mode is enabled" << std::endl;
+    if (m_flags & RANDOMX_FLAG_JIT)
+        std::cout << "[Miner] RandomY JIT mode is enabled" << std::endl;
+
     if (m_logLevel >= 2)
         std::cout << "[Miner] RandomY flags: "
                   << "JIT="         << ((m_flags & RANDOMX_FLAG_JIT) != 0)
