@@ -14,3 +14,4 @@ build/
 *.key
 !id_*.pub
 .env
+credentials.json

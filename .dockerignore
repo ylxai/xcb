@@ -2,3 +2,12 @@ build/
 README.md
 *.md
 *.log
+.git/
+.gitlab-ci.yml
+k8s/
+tests/
+credentials.json
+pool.cfg
+.env
+*.token
+*.key

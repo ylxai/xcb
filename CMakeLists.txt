@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10)
-project(miner-saya VERSION 1.0.0 LANGUAGES CXX C ASM)
+project(miner-saya VERSION 1.1.0 LANGUAGES CXX C ASM)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -12,6 +12,7 @@ add_subdirectory(external/RandomY EXCLUDE_FROM_ALL)
 
 # Tambahkan include path RandomY
 include_directories(external/RandomY/src)
+include_directories(src)
 
 # ============================================================
 # Cari dependency
@@ -59,3 +60,26 @@ endif()
 target_link_options(miner-saya PRIVATE -flto -s)
 
 install(TARGETS miner-saya DESTINATION bin)
+
+# ============================================================
+# Unit tests (CTest)
+# ============================================================
+enable_testing()
+
+# Sumber yang diuji (tanpa main.cpp — main() sudah di miner-saya)
+add_executable(miner-test
+    tests/test_config.cpp
+    src/Config.cpp
+    src/StratumClient.cpp
+    src/Miner.cpp
+)
+target_link_libraries(miner-test
+    PRIVATE
+        randomx
+        pthread
+        OpenSSL::SSL
+        OpenSSL::Crypto
+)
+target_compile_options(miner-test PRIVATE -O1)
+
+add_test(NAME miner-test COMMAND miner-test)

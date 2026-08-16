@@ -1,7 +1,9 @@
 #include "Miner.hpp"
 #include <iostream>
+#include <fstream>
 #include <cstring>
 #include <algorithm>
+#include <dirent.h>
 #include <pthread.h>
 #include <unistd.h>
 #include <sys/resource.h>
@@ -40,15 +42,14 @@ Miner::~Miner() { stop(); }
 
 void Miner::start(const MinerConfig& cfg) {
     if (m_running) return;
-    std::cout << "[Miner] Starting with " << cfg.threads << " threads" << std::endl;
-    
-    m_numThreads = cfg.threads;
 
-    // Verbose share logging? (LOG_SHARES=0/false default = quiet)
-    const char* envLog = getenv("LOG_SHARES");
-    m_verboseShares = (envLog && envLog[0] != '\0'
-        && std::string(envLog) != "0" && std::string(envLog) != "false"
-        && std::string(envLog) != "no");
+    // Log level: 0=QUIET (error+hashrate), 1=SHARE (default), 2=FULL (segala hal)
+    m_logLevel = std::max(0, std::min(2, cfg.logLevel));
+
+    if (m_logLevel >= 1)
+        std::cout << "[Miner] Starting with " << cfg.threads << " threads" << std::endl;
+
+    m_numThreads = cfg.threads;
     
     // --- RandomY flags ---
     m_flags = randomx_get_flags();
@@ -59,19 +60,52 @@ void Miner::start(const MinerConfig& cfg) {
         // Light mode: ensure FULL_MEM is removed
         m_flags = static_cast<randomx_flags>(m_flags & ~RANDOMX_FLAG_FULL_MEM);
     }
-    // Explicitly enable large pages (randomx_get_flags doesn't set it)
+    // JIT & hardware AES: hormati cfg.useJIT (flag --no-jit)
+    if (cfg.useJIT)
+        m_flags = static_cast<randomx_flags>(m_flags | RANDOMX_FLAG_JIT);
+    else
+        m_flags = static_cast<randomx_flags>(m_flags & ~RANDOMX_FLAG_JIT);
+    m_flags = static_cast<randomx_flags>(m_flags | RANDOMX_FLAG_HARD_AES);
+
+    // --- Auto-detect hugepages (item 6) ---
+    // Kalau cfg.largePages=true tapi kernel tak menyediakan hugepages
+    // (umumnya di container/k8s tanpa privileged), alloc cache bakal gagal.
+    // Deteksi /sys/kernel/mm/hugepages/*/nr_free, auto-disable kalau 0.
     if (cfg.largePages) {
-        m_flags = static_cast<randomx_flags>(m_flags | RANDOMX_FLAG_LARGE_PAGES);
+        int freeHuge = 0;
+        {
+            DIR* d = opendir("/sys/kernel/mm/hugepages");
+            if (d) {
+                struct dirent* e;
+                while ((e = readdir(d))) {
+                    if (strncmp(e->d_name, "hugepages-", 10) == 0) {
+                        std::string p = std::string("/sys/kernel/mm/hugepages/") +
+                                        e->d_name + "/nr_free";
+                        std::ifstream f(p);
+                        long n = 0;
+                        if (f >> n && n > 0) freeHuge = (int)n;
+                    }
+                }
+                closedir(d);
+            }
+        }
+        if (freeHuge <= 0) {
+            m_flags = static_cast<randomx_flags>(m_flags & ~RANDOMX_FLAG_LARGE_PAGES);
+            std::cerr << "[Miner] No free hugepages available — "
+                      << "auto-disabling LARGE_PAGES (set vm.nr_hugepages for boost)"
+                      << std::endl;
+        }
+    } else {
+        m_flags = static_cast<randomx_flags>(m_flags & ~RANDOMX_FLAG_LARGE_PAGES);
     }
-    // Enable JIT and hardware AES always for best perf
-    m_flags = static_cast<randomx_flags>(m_flags | RANDOMX_FLAG_JIT | RANDOMX_FLAG_HARD_AES);
     
-    std::cout << "[Miner] RandomY flags: "
-              << "JIT="         << ((m_flags & RANDOMX_FLAG_JIT) != 0)
-              << " FULL_MEM="   << ((m_flags & RANDOMX_FLAG_FULL_MEM) != 0)
-              << " HARD_AES="   << ((m_flags & RANDOMX_FLAG_HARD_AES) != 0)
-              << " LARGE_PAGES="<< ((m_flags & RANDOMX_FLAG_LARGE_PAGES) != 0)
-              << std::endl;
+    if (m_logLevel >= 2)
+        std::cout << "[Miner] RandomY flags: "
+                  << "JIT="         << ((m_flags & RANDOMX_FLAG_JIT) != 0)
+                  << " FULL_MEM="   << ((m_flags & RANDOMX_FLAG_FULL_MEM) != 0)
+                  << " HARD_AES="   << ((m_flags & RANDOMX_FLAG_HARD_AES) != 0)
+                  << " LARGE_PAGES="<< ((m_flags & RANDOMX_FLAG_LARGE_PAGES) != 0)
+                  << std::endl;
 
     // --- Dataset ---
     const char key[] = {'5', '6', '7', '8', '9'}; // RandomY Core Coin fixed key
@@ -87,7 +121,8 @@ void Miner::start(const MinerConfig& cfg) {
         if (!m_dataset) { std::cerr << "[Miner] Dataset alloc failed" << std::endl; return; }
 
         uint32_t datasetItems = randomx_dataset_item_count();
-        std::cout << "[Miner] Dataset items: " << datasetItems << std::endl;
+        if (m_logLevel >= 2)
+            std::cout << "[Miner] Dataset items: " << datasetItems << std::endl;
 
         // Parallel dataset init: split work across threads
         int nthreads = std::min(cfg.threads, static_cast<int>(std::thread::hardware_concurrency()));
@@ -110,7 +145,8 @@ void Miner::start(const MinerConfig& cfg) {
         m_cache = randomx_alloc_cache(m_flags);
         if (!m_cache) { std::cerr << "[Miner] Cache alloc failed" << std::endl; return; }
         randomx_init_cache(m_cache, key, sizeof(key));
-        std::cout << "[Miner] Light mode — using cache (no full dataset)" << std::endl;
+        if (m_logLevel >= 1)
+            std::cout << "[Miner] Light mode — using cache (no full dataset)" << std::endl;
     }
     
     auto t2 = std::chrono::steady_clock::now();
@@ -127,7 +163,8 @@ void Miner::start(const MinerConfig& cfg) {
             std::cerr << "[Miner] VM creation failed for worker " << i << std::endl;
             continue;
         }
-        std::cout << "[Miner] Worker " << i << " VM created" << std::endl;
+        if (m_logLevel >= 2)
+            std::cout << "[Miner] Worker " << i << " VM created" << std::endl;
         w->thread = std::thread(&Miner::workerLoop, this, w.get());
         m_workers.push_back(std::move(w));
     }
@@ -137,7 +174,7 @@ void Miner::start(const MinerConfig& cfg) {
     // --- Stratum client ---
     auto& pool = cfg.pools[0];
     m_client = std::make_unique<StratumClient>(
-        pool.host, pool.port, pool.wallet, pool.worker, pool.password
+        pool.host, pool.port, pool.wallet, pool.worker, pool.password, pool.tls
     );
     m_client->setJobCallback([this](const Job& job) { onNewJob(job); });
     m_client->setResultCallback([this](bool ok, const std::string& msg) { onShareResult(ok, msg); });
@@ -182,27 +219,24 @@ bool Miner::isRunning() const { return m_running; }
 void Miner::onNewJob(const Job& job) {
     std::lock_guard<std::mutex> lock(m_jobMutex);
     m_jobStorage = job;
-    m_currentJobId = job.jobId;
-    
-    // Recompute header hex from parsed bytes (for submission)
-    m_currentHeaderHex = bytes_to_hex(job.header.data(), (int)job.header.size());
-    
+
     m_jobp.store(&m_jobStorage, std::memory_order_release);
     m_globalNonce.store(0, std::memory_order_relaxed);
     
-    std::cout << "[Miner] Job " << job.jobId << " — target=" 
-              << std::hex << job.targetInt << std::dec << std::endl;
+    if (m_logLevel >= 1)
+        std::cout << "[Miner] Job " << job.jobId << " — target=" 
+                  << std::hex << job.targetInt << std::dec << std::endl;
 }
 
 void Miner::onShareResult(bool accepted, const std::string& msg) {
     if (accepted) {
         m_acceptedShares++;
-        if (m_verboseShares || m_acceptedShares % 50 == 0)
+        if (m_logLevel >= 1 || m_acceptedShares % 50 == 0)
             std::cout << "[Miner] ✅ Share ACCEPTED (#" << m_acceptedShares << ")" << std::endl;
     } else {
         m_rejectedShares++;
         if (m_rejectedShares <= 5 || m_rejectedShares % 10 == 0)
-            std::cout << "[Miner] ❌ Share rejected: " << msg << std::endl;
+            std::cerr << "[Miner] ❌ Share rejected: " << msg << std::endl;
     }
 }
 
@@ -224,7 +258,8 @@ void Miner::workerLoop(Worker* w) {
         // Not fatal - just continue
     }
     
-    std::cout << "[Worker " << w->index << "] started" << std::endl;
+    if (m_logLevel >= 2)
+        std::cout << "[Worker " << w->index << "] started" << std::endl;
 
     // Stack buffers — ZERO heap alloc in hot path
     uint8_t blob[40];     // header(32) + nonce LE(8)  — matches coreminer
@@ -243,7 +278,8 @@ void Miner::workerLoop(Worker* w) {
     sha3_512(dummy_in, 40, dummy_seed);
     randomx_calculate_hash(w->vm, dummy_seed, 64, dummy_out);
     w->totalHashes = 1;
-    std::cout << "[Worker " << w->index << "] warmup hash OK" << std::endl;
+    if (m_logLevel >= 2)
+        std::cout << "[Worker " << w->index << "] warmup hash OK" << std::endl;
 
     while (m_running) {
         // --- Get current job (atomic pointer) ---
@@ -259,6 +295,9 @@ void Miner::workerLoop(Worker* w) {
         // Pre-decoded header bytes (already in job.header from onNewJob)
         const uint8_t* headerPtr = job->header.data();
         uint64_t targetInt = job->targetInt;
+        // Hex header dihitung lokal dari job (HINDARI data race: thread stratum
+        // menulis m_currentHeaderHex di bawah lock sementara worker membaca tanpa lock)
+        std::string headerHex = bytes_to_hex(headerPtr, 32);
 
         // Grab a batch of nonces (atomic — optimasi 4)
         uint64_t nonceBase = m_globalNonce.fetch_add(BLOCKSIZE, 
@@ -290,14 +329,14 @@ void Miner::workerLoop(Worker* w) {
                     reinterpret_cast<const uint8_t*>(&nonceBE), 8);
                 std::string mixHex = "0x" + bytes_to_hex(hashout, 32);
                 
-                if (m_verboseShares)
+                if (m_logLevel >= 2)
                     std::cout << "\n[Worker " << w->index << "] ⭐ Share found!"
                               << " nonce=" << nonceHex
                               << " hash=" << bytes_to_hex(hashout, 12) << "..."
                               << std::endl;
 
                 if (m_client && m_client->isConnected()) {
-                    m_client->submitShare(m_currentHeaderHex, nonceHex, mixHex);
+                    m_client->submitShare(headerHex, nonceHex, mixHex);
                 }
             }
         }
