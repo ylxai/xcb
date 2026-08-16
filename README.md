@@ -1,50 +1,91 @@
 # miner-saya — Core Coin (XCB) RandomY Miner
 
-Miner C++ pribadi untuk **Core Coin (XCB)** menggunakan algoritma **RandomY** (fork RandomX v1.2.1).  
+Miner C++ pribadi untuk **Core Coin (XCB)** menggunakan algoritma **RandomY** (fork RandomX v1.2.1).
 Dibangun dari nol — **zero dev fee**, **zero dependensi eksternal** selain RandomY library.
 
----
-
-## 📋 Hasil Buatan Sendiri
-
-Seluruh kode ditulis manual, bukan fork/clone dari miner lain:
-
-| Komponen | Asal | Detail |
-|----------|------|--------|
-| **StratumClient** | Tulis manual | ETHPROXY protocol (`eth_submitLogin` + `eth_getWork` + `eth_submitWork`) |
-| **SHA3-512** | Tulis manual | Pure stack, zero heap alloc, keccak-f[1600] dari spec FIPS 202 |
-| **Manage VM thread** | Tulis manual | randomx_create_vm per thread, cache sharing read-only |
-| **Nonce distribution** | Tulis manual | Atomic global counter — tidak ada overlap, coverage 100% |
-| **Config parser** | Tulis manual | Parse `~/xcb/pool.cfg` + CLI flags |
-| **RandomY library** | Submodule | RandomY v1.1.17 (RandomX fork untuk Core Coin) — BSD license |
-
-**Zero dev fee.** Tidak ada switch wallet, tidak ada mining untuk alamat lain, tidak ada hidden thread.  
-Semua hash 100% ke wallet yang dikonfigurasi.
+- **Zero dev fee** — semua hash 100% ke wallet yang dikonfigurasi, tidak ada switch wallet
+- **ETHPROXY protocol** (`eth_submitLogin` / `eth_getWork` / `eth_submitWork`) untuk pool catchthatrabbit
+- **Light mode** (256MB cache) atau **full mode** (~2.6GB dataset), JIT compiler, huge pages auto-detect
+- **CPU affinity + nice priority** — thread di-pin per core
+- **Multi-pool config file** (`pool.cfg`) — failover otomatis antar server
 
 ---
 
-## 🚀 Cara Pakai
+## Docker Image
 
-### Persyaratan
-
-- Linux x86_64 dengan AES-NI
-- CMake ≥ 3.10
-- Compiler C++17 (g++ ≥ 8 atau clang ≥ 7)
-
-### Build
+Image resmi di **Docker Hub**: [`ylxai/xcb`](https://hub.docker.com/r/ylxai/xcb)
 
 ```bash
-git clone https://github.com/your/repo miner-saya
-cd miner-saya
-git submodule update --init --recursive
-mkdir build && cd build
-cmake .. -DARCH=native
-make -j$(nproc)
+docker pull ylxai/xcb:v1
+
+# Jalankan cepat (env dari image default: wallet + pool sg)
+docker run --rm ylxai/xcb:v1
+
+# Jalankan dengan override penuh
+docker run --rm -d --name xcb \
+  -e WALLET=<alamat_wallet> \
+  -e POOL=sg.catchthatrabbit.com:8008 \
+  -e WORKER=myworker \
+  -e THREADS=4 \
+  -e FULL_MEM=0 \
+  -e LARGE_PAGES=0 \
+  ylxai/xcb:v1
 ```
 
-### Konfigurasi Wallet & Pool
+> **⚠️ Wajib di container:** `LARGE_PAGES=0` (container tanpa hugepages/mlock gagal alloc cache).
+> **Disarankan:** `FULL_MEM=0` (light, 256MB) — full mode butuh ~2.6GB RAM.
 
-Buat file `~/xcb/pool.cfg` (otomatis terdeteksi):
+---
+
+## Environment Variables
+
+Semua env vars dibaca langsung (precedence ≥ config file & CLI):
+
+| Variable | Default | Deskripsi |
+|----------|---------|-----------|
+| `WALLET` | *(dari image)* | Alamat wallet Core Coin (XCB) |
+| `POOL` | `sg.catchthatrabbit.com:8008` | Host pool `host:port` |
+| `WORKER` | `pool` | Nama worker (ditampilkan pool sebagai `wallet.worker`) |
+| `THREADS` | *(kosong)* | Jumlah thread. **Kosong = auto (jumlah CPU cores)** |
+| `FULL_MEM` | *(true)* | `1` = dataset full 2.6GB, `0`/`false` = light 256MB |
+| `LARGE_PAGES` | *(true)* | `1` = huge pages, **`0`/`false` wajib di container** |
+| `LOG_SHARES` | *(false)* | `1` = print setiap share found/accepted (default quiet — pool difficulty rendah sangat noisy) |
+
+---
+
+## Build dari Source (Lokal)
+
+### Persyaratan
+- Linux x86_64 dengan **AES-NI + AVX2** (build memakai `-march=x86-64-v3`) atau aarch64 dengan crypto extensions
+- CMake ≥ 3.10
+- Compiler C++17 (g++ ≥ 8 atau clang ≥ 7)
+- OpenSSL dev headers
+
+### Build
+```bash
+git clone <url-repo> xcb
+cd xcb
+git submodule update --init --recursive   # Wajib: tarik RandomY
+
+mkdir build && cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release
+make -j$(nproc)
+# Binary: build/miner-saya (~215KB stripped)
+```
+
+---
+
+## Cara Pakai (Local Binary)
+
+```bash
+./miner-saya                        # auto threads, lihat pool.cfg / env
+./miner-saya -t 4                   # 4 thread
+./miner-saya --light -t 1           # 1 thread light mode
+./miner-saya -o pool.lain.com:8008 -u wallet.worker   # override pool+wallet
+```
+
+### Konfigurasi `pool.cfg`
+File `pool.cfg` (cwd, `/miner/pool.cfg`, atau `~/xcb/pool.cfg` — dicek otomatis) mendukung multi-server failover:
 
 ```ini
 wallet=alamat_wallet_anda
@@ -55,82 +96,107 @@ server[2]=hk.catchthatrabbit.com
 port[2]=8008
 server[3]=de.catchthatrabbit.com
 port[3]=8008
+threads=4
+light=true
 ```
 
-Atau via CLI (override file):
-
-```bash
-./miner-saya -o sg.catchthatrabbit.com:8008 -u alamat_wallet -t 4
-```
-
-### Usage
-
-```bash
-./miner-saya                        # auto 4 thread, light mode
-./miner-saya -t 4                   # 4 thread
-./miner-saya --light -t 1           # 1 thread light mode
-./miner-saya -t 4 --light           # 4 thread light mode (default)
-
-# Semua pool dari ~/xcb/pool.cfg otomatis; bisa override:
-./miner-saya -o pool.lain.com:8008 -u wallet.worker
-```
-
-### Command Flags
-
-| Flag | Fungsi |
-|------|--------|
-| `-o host:port` | Pool address (override config file) |
-| `-u wallet[.worker]` | Wallet address |
-| `-p password` | Pool password (default: x) |
-| `-t N` | Jumlah thread |
-| `--light` | Mode light dataset (256MB cache, init ~0.3s) |
-| `--no-jit` | Non-aktifkan JIT compiler |
+> Precedence: **env vars > pool.cfg > CLI flags**. `WALLET`+`POOL` env aktif = pool.cfg diabaikan.
+> Commands flag: `-o host:port`, `-u wallet[.worker]`, `-p password`, `-t N`, `--light`, `--no-jit`, `-h`.
 
 ---
 
-## ⚡ Kelebihan
+## Docker (Build Image Sendiri)
 
-| Aspek | miner-saya | Miner lain (coreminer, dll) |
-|-------|-----------|---------------------------|
-| **Dev fee** | **0%** — semua hash ke wallet kamu | 1-2% dev fee untuk developer |
-| **Kode** | 100% buatan sendiri, transparan | Fork/clone, ribuan line, potensi backdoor |
-| **SHA3-512** | Pure C++ stack, optimasi manual | picosha3 atau OpenSSL |
-| **Memory** | Light ~256MB cache saja | Beberapa butuh 2GB+ dataset |
-| **Protocol** | ETHPROXY (auto-detect) | Multi-protocol tapi kompleks |
-| **Nonce** | Atomic counter, coverage penuh | Range-based, ada celah overlap |
-| **Dependency** | Hanya RandomY + Threads + OpenSSL | Boost, libmicrohttpd, jsoncpp, dll |
-| **Binary size** | ~215KB stripped | Ratusan MB dengan dependensi |
-| **Startup** | 0.3s (light), 6s (full) | 10-30s untuk init dataset |
+```bash
+cd xcb
+git submodule update --init --recursive
+docker build -t ylxai/xcb:v1 .
+docker run --rm ylxai/xcb:v1
+```
 
-### Tech
-
-- **RandomY** — RandomX fork untuk Core Coin, 256MB dataset, JIT compiler
-- **ETHPROXY** — protocol pool catchthatrabbit via `eth_submitLogin` / `eth_getWork` / `eth_submitWork`
-- **Huge Pages** — otomatis terdeteksi (RANDOMX_FLAG_LARGE_PAGES), TLB miss berkurang
-- **CPU Affinity** — thread di-pin ke core masing-masing
-- **Nice Priority** — otomatis set nice -10 untuk prioritas lebih tinggi
+Image docker **multi-stage** (builder → runtime ~32MB), jalan sebagai user non-root `miner`, entrypoint `./miner-saya`.
+`pool.cfg` ikut di-copy ke `/miner/pool.cfg` sebagai fallback.
 
 ---
 
-## 📊 Benchmark
+## Kubernetes / Akash
+
+### Akash SDL
+```yaml
+version: "2.0"
+services:
+  service-1:
+    image: ylxai/xcb:v1
+    env:
+      - WALLET=<alamat_wallet>
+      - POOL=sg.catchthatrabbit.com:8008
+      - WORKER=akash
+      - THREADS=16        # harus ≤ cpu.units
+      - FULL_MEM=0
+      - LARGE_PAGES=0
+    expose:
+      - port: 80
+        as: 80
+        to:
+          - global: true
+profiles:
+  compute:
+    service-1:
+      resources:
+        cpu:
+          units: 16
+        memory:
+          size: 8Gi
+        storage:
+          - size: 5Gi
+  placement:
+    dcloud:
+      pricing:
+        service-1:
+          denom: uact
+          amount: 100000
+deployment:
+  service-1:
+    dcloud:
+      profile: service-1
+      count: 1
+```
+
+> `expose` port 80 sebenarnya tidak dipakai (tidak ada web server) — boleh dihapus.
+
+### Kubernetes (Deployment + Secret)
+Contoh lengkap ada di [`k8s/deployment.yaml`](k8s/deployment.yaml):
+```bash
+kubectl create namespace mining
+kubectl apply -f k8s/deployment.yaml
+kubectl logs -n mining deploy/xcb-miner -f
+```
+Wallet disimpan sebagai **Secret** (tidak di-env image). **`THREADS` wajib = `limits.cpu`**
+(default di kode = `nproc` NODE, bukan limit pod — salah set akan oversubscribe).
+
+---
+
+## Benchmark
 
 | Thread | Mode | Hashrate | RAM |
 |--------|------|----------|-----|
 | 1 | Light | ~68 H/s | ~256MB |
 | 2 | Light | ~122 H/s | ~256MB |
 | 4 | Light | **~291 H/s** | ~256MB |
+| 16 | Light | ~1.26 KH/s | ~256MB |
+| 16 | **Full** | **~7.9 KH/s** | ~2.6GB |
+
+> Full mode ±6x hashrate light mode (diverifikasi di VPS 16 core, 8GB RAM).
 
 ---
 
-## 🔧 Optimasi untuk Performa Lebih
-
-Untuk hasil maksimal di mesin sendiri:
+## Optimasi untuk Mesin Sendiri
 
 ```bash
-# Huge pages (2MB) — kalau belum di-set
+# Huge pages (2MB)
 sudo sysctl vm.nr_hugepages=1280
 
-# CPU performance governor (jarang diperlukan di VM/container)
+# CPU performance governor
 echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
 
 # Realtime priority
@@ -139,25 +205,52 @@ sudo chrt -rr 1 ./miner-saya
 
 ---
 
-## 🛠 Struktur Proyek
+## Logging
+
+- **Blok `=== HASHRATE ===`** setiap 5 detik (total + per-worker)
+- **Shares accepted** — ringkasan tiap 50 share (atau per-share jika `LOG_SHARES=1`)
+- **Rejected** — selalu ditampilkan
+- **Job baru dari pool** — auto-detect header/target
+
+---
+
+## Troubleshooting
+
+| Gejala | Penyebab | Solusi |
+|--------|----------|--------|
+| `cache alloc failed` | Huge pages tidak tersedia di container | Set `LARGE_PAGES=0` |
+| Crash `stoul` / `Config` gagal | Env var kosong (`-e THREADS=`) | Biarkan env kosong atau isi nilai valid — versi v1 sudah menangani string kosong |
+| Cuma 1 thread padahal banyak core | Default kode lama `threads=1` | Set `THREADS=<n>` atau gunakan v1 (auto = semua cores) |
+| Hashrate ~50% dari harapan | Mode light (FULL_MEM=0) | `FULL_MEM=1` + RAM cukup |
+| Worker stuck (0.0x H/s) | Core sibuk/di luar cpuset provider (CPU affinity) | Cek `lscpu`/`Cpus_allowed_list`; jalankan berkali atau kurangi THREADS |
+| Build gagal `RandomY` tidak ditemukan | Submodule belum di-init | `git submodule update --init --recursive` |
+| Log kapah (ribuan share/detik) | Pool difficulty rendah + log per-share | Default v1 quiet; aktifkan verbose hanya untuk debug (`LOG_SHARES=1`) |
+
+---
+
+## Struktur Proyek
 
 ```
-miner-saya/
-├── CMakeLists.txt           # Build system
+xcb/
+├── CMakeLists.txt           # Build system (-march=x86-64-v3 / armv8-a+crypto, -O3, LTO, stripped)
+├── Dockerfile               # Multi-stage: builder → runtime ~32MB, user non-root
+├── .gitlab-ci.yml           # CI Puzl RunMyJob (test 2m saat push, mine 55m/jam saat schedule)
+├── k8s/
+│   └── deployment.yaml      # Deployment + Secret contoh
 ├── external/
-│   └── RandomY/             # RandomY library (submodule)
-├── src/
-│   ├── main.cpp             # Entrypoint + signal handler
-│   ├── Config.hpp/.cpp      # Config parser (file + CLI)
-│   ├── StratumClient.hpp/.cpp # ETHPROXY protocol client
-│   └── Miner.hpp/.cpp       # Thread pool, VM management, mining loop
-└── build/
-    └── miner-saya           # Binary executable
+│   └── RandomY/             # RandomY library (submodule, BSD 3-Clause)
+├── pool.cfg                 # Multi-server config (wallet + 3 pool failover)
+└── src/
+    ├── main.cpp             # Entrypoint + signal handler
+    ├── Config.hpp/.cpp      # Config parser (env vars + file + CLI)
+    ├── StratumClient.hpp/.cpp # ETHPROXY protocol client
+    ├── Miner.hpp/.cpp       # Thread pool, VM management, mining loop, stats
+    └── picosha3.h           # SHA3-512 (header-only, stack-based)
 ```
 
 ---
 
-## 📝 Lisensi
+## Lisensi
 
-Kode sendiri — bebas digunakan untuk keperluan pribadi.  
+Kode sendiri — bebas digunakan untuk keperluan pribadi.
 RandomY library © RandomX contributors — BSD 3-Clause.

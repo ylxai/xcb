@@ -30,7 +30,7 @@ variables:
 
 # --- JOB 1: Test singkat (2 menit) - hanya saat push, buktikan miner jalan ---
 test-miner:
-  image: ylxai/kube-xcb:v2
+  image: ylxai/xcb:v1
   tags:
     - run
   rules:
@@ -50,7 +50,7 @@ test-miner:
 # Pipeline schedule tiap jam (cron 0 * * * *) -> job 55 menit, jeda ~5 menit,
 # tanpa overlap antar job. Kalau satu job gagal, jam berikutnya jalan lagi.
 mine-full:
-  image: ylxai/kube-xcb:v2
+  image: ylxai/xcb:v1
   tags:
     - run
   rules:

@@ -1,4 +1,4 @@
-# Deployment minimal untuk miner-saya (kube-xcb) di Kubernetes
+# Deployment minimal untuk miner-saya (xcb) di Kubernetes
 # Prasyarat:
 #   - Image sudah di-push ke registry yang bisa diakses cluster
 #   - FULL_MEM=0 (light mode) — full mem butuh hugepages yang jarang ada di managed k8s
@@ -28,7 +28,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: miner
-          image: ylxai/kube-xcb:latest   # Docker Hub multi-arch (linux/amd64, linux/arm64)
+          image: ylxai/xcb:latest   # Docker Hub multi-arch (linux/amd64, linux/arm64)
           imagePullPolicy: IfNotPresent
           env:
             # WAJIB: light mode (full mem crash di container tanpa hugepages)
