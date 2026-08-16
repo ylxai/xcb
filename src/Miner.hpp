@@ -51,8 +51,6 @@ private:
     
     // Batch-friendly job data (pre-decoded, pre-parsed)
     std::atomic<uint64_t> m_globalNonce{0};
-    std::string m_currentJobId;
-    std::string m_currentHeaderHex;
     
     // Stats
     mutable std::mutex m_statsMutex;
@@ -63,5 +61,5 @@ private:
     // Control
     std::atomic<bool> m_running{false};
     std::unique_ptr<StratumClient> m_client;
-    bool m_verboseShares = false;   // LOG_SHARES=1 -> print setiap share
+    int m_logLevel = 1;        // 0=QUIET 1=SHARE 2=FULL
 };

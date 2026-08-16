@@ -1,0 +1,17 @@
+# Template config miner-saya.
+# Copy ke pool.cfg lalu isi wallet kamu. JANGAN commit pool.cfg berisi wallet.
+#
+# Precedence: env vars (WALLET/POOL/...) > pool.cfg > CLI flags.
+# Format server[N]: host, host:port, atau host:port:tls (TLS wajib jika pool
+# mendukung/ mensyaratkan — kebanyakan pool stratum modern memakai TLS).
+#
+wallet=GANTI_DENGAN_WALLET_KAMU
+worker=pool
+server[1]=sg.catchthatrabbit.com:8008
+server[2]=hk.catchthatrabbit.com:8008
+server[3]=de.catchthatrabbit.com:8008
+# threads=4            # opsional (default auto: cgroup-aware, hormati limits.cpu)
+# light=true           # default full mem (2.6GB); light = cache 256MB
+# no_jit=false         # default JIT on
+# large_pages=true     # default on; auto-off jika kernel tak menyediakan hugepages
+# log_level=1          # 0=QUIET (error+hashrate), 1=SHARE (default), 2=FULL

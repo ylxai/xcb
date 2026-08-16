@@ -39,19 +39,22 @@ WORKDIR /miner
 # Copy binary from builder
 COPY --from=builder /build/build/miner-saya .
 
-# Fallback config (multi-server failover) kalau env vars di-unset
-COPY pool.cfg .
+# Fallback config TANPA wallet (wallet wajib via env/secret —
+# jangan pernah bake secret ke image; siapa pun yang pull image
+# tidak boleh tahu wallet kamu).
+COPY pool.cfg.example /miner/pool.cfg
 
 RUN chown -R miner:miner /miner
 
 USER miner
 
-# Default env vars (override at runtime via docker-compose or Akash)
-ENV WALLET=cb23d6d8557e776f5ff9ab6a7fb7f59a3d385245fa7a
+# Default env vars — TANPA WALLET (wajib di-set runtime via
+# docker run -e WALLET=... atau Akash/k8s secret).
 ENV POOL=sg.catchthatrabbit.com:8008
 ENV WORKER=pool
 ENV THREADS=
 ENV FULL_MEM=
 ENV LARGE_PAGES=0
+ENV LOG_LEVEL=1
 
 ENTRYPOINT ["./miner-saya"]
