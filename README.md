@@ -259,7 +259,7 @@ sudo chrt -rr 1 ./miner-saya
   - `eth_submitHashrate` dikirim tiap 60s (hashrate + worker id) — pool ethproxy dapat melihat hashrate
   - Dockerfile: `FULL_MEM` kini auto (bukan force 0), komentar multi-pool
 - [x] **Fase 5 — Submit engine & perf**: job versioning + stale guard ✅, rate-limit submit ✅, nonce allocation review ✅
-  - Job versioning: `m_jobSeq` naik per job; share untuk job > 3 versi di-drop (counter `stale`), worker berhenti hashing header yang sudah kadaluarsa — tidak membuang hash & tidak flood pool dengan share basi
+  - Job versioning: `m_jobSeq` naik per job; share untuk job > 3 versi di-drop (counter `stale`), worker berhenti hashing header yang sudah kedaluwarsa — tidak membuang hash & tidak flood pool dengan share basi
   - Rate-limit submit (anti-ban): `--submit-interval-ms N` / config `submit-interval-ms` (default `0` = unlimited; pool menerima semua, teruji 1105 share/60s tanpa reject)
   - Nonce allocation: sudah non-overlap via `fetch_add` atomik; di-review tanpa perubahan (batch 32, worker re-snapshot per batch)
   - Warmup: JIT compiled hash pertama = 2-3 ms (diukur) — tidak ada ruang optimasi

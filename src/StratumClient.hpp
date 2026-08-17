@@ -78,7 +78,7 @@ private:
     int m_connectFails = 0;
     std::function<double()> m_hashrateProvider;
     uint64_t m_workerIdHex = 0;
-    std::atomic<int> m_submitIntervalMs{100};   // min ms between submits (0 = off)
+    std::atomic<int> m_submitIntervalMs{0};     // min ms between submits (0 = off)
     std::mutex m_rateMutex;
     std::chrono::steady_clock::time_point m_lastSubmitTime{};
     uint64_t m_pendingGetWorkId = 0;
