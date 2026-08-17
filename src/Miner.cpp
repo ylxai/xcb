@@ -218,6 +218,48 @@ void Miner::stop() {
 
 bool Miner::isRunning() const { return m_running; }
 
+static int parse_target_bytes(const std::string& hex, uint8_t out[32]) {
+    memset(out, 0, 32);
+    std::string t = hex;
+    if (t.size() >= 2 && t[0] == '0' && (t[1] == 'x' || t[1] == 'X')) t = t.substr(2);
+    int hexLen = (int)t.size();
+    int bytes = 0;
+    for (int i = 0; i < 32; i++) {
+        int hIdx = hexLen - 2 - 2 * i;  // nibbles from the right (big-endian)
+        if (hIdx < 0) break;
+        unsigned int byte = 0;
+        for (int k = 0; k < 2; k++) {
+            char c = t[hIdx + k];
+            unsigned int v = (c >= '0' && c <= '9') ? c - '0'
+                           : (c >= 'a' && c <= 'f') ? c - 'a' + 10
+                           : (c >= 'A' && c <= 'F') ? c - 'A' + 10 : 0;
+            byte = (byte << 4) | v;
+        }
+        out[31 - i] = (uint8_t)byte;
+        bytes++;
+    }
+    return bytes;
+}
+
+// 8-byte MSB of the target as delivered (left-aligned in the hex string),
+// right-padded with zeros. Used for the ethproxy 64-bit share check.
+static void parse_target_msb8(const std::string& hex, uint8_t out[8]) {
+    memset(out, 0, 8);
+    std::string t = hex;
+    if (t.size() >= 2 && t[0] == '0' && (t[1] == 'x' || t[1] == 'X')) t = t.substr(2);
+    for (int i = 0; i < 8; i++) {
+        int hIdx = 2 * i;
+        if (hIdx + 1 >= (int)t.size()) break;
+        auto hexval = [](char c) -> unsigned int {
+            if (c >= '0' && c <= '9') return c - '0';
+            if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+            if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+            return 0;
+        };
+        out[i] = (uint8_t)((hexval(t[hIdx]) << 4) | hexval(t[hIdx + 1]));
+    }
+}
+
 void Miner::onNewJob(const Job& job) {
     std::lock_guard<std::mutex> lock(m_jobMutex);
     m_jobStorage = job;
@@ -225,8 +267,14 @@ void Miner::onNewJob(const Job& job) {
     
     // Recompute header hex from parsed bytes (for submission)
     m_currentHeaderHex = bytes_to_hex(job.header.data(), (int)job.header.size());
+    m_targetBytesUsed = parse_target_bytes(job.targetHex, m_targetBytes);
+    parse_target_msb8(job.targetHex, m_targetMsb8);
+    // Full 256-bit target (stratum style) only when the pool sends a
+    // complete 32-byte target. Shorter/odd-length targets (ethproxy,
+    // e.g. 60-hex as sent by catchthatrabbit) are checked as 64-bit MSB,
+    // which is exactly how the pool validates shares.
+    m_useFullTarget = (job.targetHex.length() >= 63);
     
-    m_jobp.store(&m_jobStorage, std::memory_order_release);
     m_globalNonce.store(0, std::memory_order_relaxed);
     
     std::cout << "[Miner] Job " << job.jobId << " — target=" 
@@ -285,9 +333,25 @@ void Miner::workerLoop(Worker* w) {
     std::cout << "[Worker " << w->index << "] warmup hash OK" << std::endl;
 
     while (m_running) {
-        // --- Get current job (atomic pointer) ---
-        Job* job = m_jobp.load(std::memory_order_acquire);
-        if (!job || job->header.empty()) {
+        // --- Snapshot current job under the job lock ---
+        // (fix: no data race with onNewJob, and every share is submitted
+        //  with the header of the job it was actually mined against)
+        Job snapshot;
+        std::string snapHeaderHex;
+        uint8_t snapTarget[32];
+        int snapTargetUsed;
+        uint8_t snapMsb8[8];
+        bool snapUseFull;
+        {
+            std::lock_guard<std::mutex> lock(m_jobMutex);
+            snapshot = m_jobStorage;
+            snapHeaderHex = bytes_to_hex(snapshot.header.data(), (int)snapshot.header.size());
+            memcpy(snapTarget, m_targetBytes, 32);
+            snapTargetUsed = m_targetBytesUsed;
+            memcpy(snapMsb8, m_targetMsb8, 8);
+            snapUseFull = m_useFullTarget;
+        }
+        if (snapshot.header.empty()) {
             idleSpins++;
             std::this_thread::sleep_for(std::chrono::milliseconds(
                 idleSpins > 10 ? 100 : 10));
@@ -295,9 +359,8 @@ void Miner::workerLoop(Worker* w) {
         }
         idleSpins = 0;
 
-        // Pre-decoded header bytes (already in job.header from onNewJob)
-        const uint8_t* headerPtr = job->header.data();
-        uint64_t targetInt = job->targetInt;
+        // Pre-decoded header bytes (already in snapshot.header from onNewJob)
+        const uint8_t* headerPtr = snapshot.header.data();
 
         // Grab a batch of nonces (atomic — optimasi 4)
         uint64_t nonceBase = m_globalNonce.fetch_add(BLOCKSIZE, 
@@ -317,12 +380,27 @@ void Miner::workerLoop(Worker* w) {
             localHashes++;
             w->totalHashes++;
 
-            // Target check — first 8 bytes of hash as big-endian uint64
-            uint64_t hashVal = 0;
-            for (int b = 0; b < 8; b++)
-                hashVal = (hashVal << 8) | hashout[b];
+            // Target check — two modes:
+            //  - ethproxy (short target): 64-bit compare of hash MSB vs
+            //    target MSB, exactly how the pool validates shares
+            //  - stratum (full 256-bit target): big-endian hash <= target
+            bool meetsTarget;
+            if (snapUseFull) {
+                meetsTarget = true;
+                for (int b = 0; b < snapTargetUsed; b++) {
+                    if (hashout[b] < snapTarget[b]) break;
+                    if (hashout[b] > snapTarget[b]) { meetsTarget = false; break; }
+                }
+            } else {
+                uint64_t hv = 0, tv = 0;
+                for (int b = 0; b < 8; b++) {
+                    hv = (hv << 8) | hashout[b];
+                    tv = (tv << 8) | snapMsb8[b];
+                }
+                meetsTarget = (hv < tv);
+            }
 
-            if (hashVal < targetInt) {
+            if (meetsTarget) {
                 // SHARE FOUND! Submit via Stratum
                 uint64_t nonceBE = htobe64(nonce);
                 std::string nonceHex = "0x" + bytes_to_hex(
@@ -336,7 +414,7 @@ void Miner::workerLoop(Worker* w) {
                               << std::endl;
 
                 if (m_client && m_client->isConnected()) {
-                    m_client->submitShare(m_currentHeaderHex, nonceHex, mixHex);
+                    m_client->submitShare(snapHeaderHex, nonceHex, mixHex);
                 }
             }
         }
