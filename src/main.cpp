@@ -1,5 +1,6 @@
 #include "Config.hpp"
 #include "Miner.hpp"
+#include "selftest.h"
 #include <iostream>
 #include <csignal>
 #include <atomic>
@@ -16,6 +17,13 @@ extern "C" void signal_handler(int sig) {
 }
 
 int main(int argc, char* argv[]) {
+    // Self-test mode: verify target parsing/compare + blob encoding
+    for (int i = 1; i < argc; i++) {
+        if (std::string(argv[i]) == "--selftest") {
+            return run_selftest() ? 0 : 1;
+        }
+    }
+
     // Signal handlers
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
