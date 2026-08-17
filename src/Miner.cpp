@@ -218,7 +218,7 @@ void Miner::stop() {
 
 bool Miner::isRunning() const { return m_running; }
 
-static int parse_target_bytes(const std::string& hex, uint8_t out[32]) {
+static int parse_target_bytes(const std::string& hex, uint8_t out[32], bool* ok) {
     memset(out, 0, 32);
     std::string t = hex;
     if (t.size() >= 2 && t[0] == '0' && (t[1] == 'x' || t[1] == 'X')) t = t.substr(2);
@@ -227,15 +227,16 @@ static int parse_target_bytes(const std::string& hex, uint8_t out[32]) {
     for (int i = 0; i < 32; i++) {
         int hIdx = hexLen - 2 - 2 * i;  // nibbles from the right (big-endian)
         if (hIdx < 0) break;
-        unsigned int byte = 0;
-        for (int k = 0; k < 2; k++) {
-            char c = t[hIdx + k];
-            unsigned int v = (c >= '0' && c <= '9') ? c - '0'
-                           : (c >= 'a' && c <= 'f') ? c - 'a' + 10
-                           : (c >= 'A' && c <= 'F') ? c - 'A' + 10 : 0;
-            byte = (byte << 4) | v;
-        }
-        out[31 - i] = (uint8_t)byte;
+        auto hexval = [](char c) -> int {
+            if (c >= '0' && c <= '9') return c - '0';
+            if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+            if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+            return -1;
+        };
+        int hi = hexval(t[hIdx]);
+        int lo = hexval(t[hIdx + 1]);
+        if (hi < 0 || lo < 0) { *ok = false; return 0; }
+        out[31 - i] = (uint8_t)((hi << 4) | lo);
         bytes++;
     }
     return bytes;
@@ -243,37 +244,55 @@ static int parse_target_bytes(const std::string& hex, uint8_t out[32]) {
 
 // 8-byte MSB of the target as delivered (left-aligned in the hex string),
 // right-padded with zeros. Used for the ethproxy 64-bit share check.
-static void parse_target_msb8(const std::string& hex, uint8_t out[8]) {
+// Sets *ok=false when the hex string contains non-hex characters.
+static void parse_target_msb8(const std::string& hex, uint8_t out[8], bool* ok) {
     memset(out, 0, 8);
     std::string t = hex;
     if (t.size() >= 2 && t[0] == '0' && (t[1] == 'x' || t[1] == 'X')) t = t.substr(2);
     for (int i = 0; i < 8; i++) {
         int hIdx = 2 * i;
         if (hIdx + 1 >= (int)t.size()) break;
-        auto hexval = [](char c) -> unsigned int {
+        auto hexval = [](char c) -> int {
             if (c >= '0' && c <= '9') return c - '0';
             if (c >= 'a' && c <= 'f') return c - 'a' + 10;
             if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-            return 0;
+            return -1;
         };
-        out[i] = (uint8_t)((hexval(t[hIdx]) << 4) | hexval(t[hIdx + 1]));
+        int hi = hexval(t[hIdx]);
+        int lo = hexval(t[hIdx + 1]);
+        if (hi < 0 || lo < 0) { *ok = false; return; }
+        out[i] = (uint8_t)((hi << 4) | lo);
     }
 }
 
 void Miner::onNewJob(const Job& job) {
+    // Parse target first; reject malformed targets without touching the
+    // current job (workers keep mining the previous valid one).
+    uint8_t tmpBytes[32];
+    uint8_t tmpMsb8[8];
+    bool ok = true;
+    int used = parse_target_bytes(job.targetHex, tmpBytes, &ok);
+    parse_target_msb8(job.targetHex, tmpMsb8, &ok);
+    if (!ok || used == 0) {
+        std::cerr << "[Miner] Invalid target from pool, keeping previous job"
+                  << std::endl;
+        return;
+    }
+
     std::lock_guard<std::mutex> lock(m_jobMutex);
     m_jobStorage = job;
     m_currentJobId = job.jobId;
     
     // Recompute header hex from parsed bytes (for submission)
     m_currentHeaderHex = bytes_to_hex(job.header.data(), (int)job.header.size());
-    m_targetBytesUsed = parse_target_bytes(job.targetHex, m_targetBytes);
-    parse_target_msb8(job.targetHex, m_targetMsb8);
+    memcpy(m_targetBytes, tmpBytes, 32);
+    m_targetBytesUsed = used;
+    memcpy(m_targetMsb8, tmpMsb8, 8);
     // Full 256-bit target (stratum style) only when the pool sends a
-    // complete 32-byte target. Shorter/odd-length targets (ethproxy,
-    // e.g. 60-hex as sent by catchthatrabbit) are checked as 64-bit MSB,
-    // which is exactly how the pool validates shares.
-    m_useFullTarget = (job.targetHex.length() >= 63);
+    // complete 32-byte target (64 hex). Any other length (ethproxy, e.g.
+    // 60-hex as sent by catchthatrabbit) is checked as 64-bit MSB, which
+    // is exactly how the pool validates shares.
+    m_useFullTarget = (job.targetHex.length() == 64);
     
     m_globalNonce.store(0, std::memory_order_relaxed);
     
@@ -345,7 +364,7 @@ void Miner::workerLoop(Worker* w) {
         {
             std::lock_guard<std::mutex> lock(m_jobMutex);
             snapshot = m_jobStorage;
-            snapHeaderHex = bytes_to_hex(snapshot.header.data(), (int)snapshot.header.size());
+            snapHeaderHex = m_currentHeaderHex;
             memcpy(snapTarget, m_targetBytes, 32);
             snapTargetUsed = m_targetBytesUsed;
             memcpy(snapMsb8, m_targetMsb8, 8);
