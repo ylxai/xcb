@@ -15,7 +15,8 @@ struct MinerConfig {
     std::vector<PoolConfig> pools;
     int threads = 0;   // 0 = auto (CPU cores)
     bool useJIT = true;
-    bool fullMem = true;
+    bool fullMem = false;       // set when FULL_MEM/light/--full explicitly
+    bool fullMemAuto = true;    // true = pick full/light from available RAM
     bool hardAES = true;
     bool largePages = true;
 };

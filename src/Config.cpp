@@ -76,6 +76,7 @@ MinerConfig Config::loadFile(const std::string& path) {
             cfg.useJIT = (val != "true" && val != "1" && val != "yes");
         } else if (key == "light") {
             cfg.fullMem = (val == "false" || val == "0" || val == "no");
+            cfg.fullMemAuto = false;
         } else if (key == "no_aes") {
             cfg.hardAES = (val != "true" && val != "1" && val != "yes");
         }
@@ -100,10 +101,11 @@ MinerConfig Config::parse(int argc, char* argv[]) {
     const char* envFullMem = getenv("FULL_MEM");
     const char* envLargePages = getenv("LARGE_PAGES");
     
-    // FULL_MEM defaults to true; set "0" or "false" to disable
+    // FULL_MEM: "0"/"false" = light, "1"/"true" = full; empty/unset = auto (RAM)
     if (envFullMem && envFullMem[0] != '\0') {
         std::string fm = envFullMem;
         cfg.fullMem = (fm != "0" && fm != "false" && fm != "no");
+        cfg.fullMemAuto = false;
     }
     
     // LARGE_PAGES defaults to true; set "0" or "false" to disable
@@ -179,6 +181,11 @@ MinerConfig Config::parse(int argc, char* argv[]) {
             
         } else if (arg == "--light") {
             cfg.fullMem = false;
+            cfg.fullMemAuto = false;
+            
+        } else if (arg == "--full") {
+            cfg.fullMem = true;
+            cfg.fullMemAuto = false;
             
         } else if (arg == "--no-jit") {
             cfg.useJIT = false;
@@ -190,6 +197,7 @@ MinerConfig Config::parse(int argc, char* argv[]) {
                       << "  -p password      Pool password\n"
                       << "  -t N             Thread count\n"
                       << "  --light          Use light dataset (no full mem)\n"
+                      << "  --full           Force full dataset (default: auto by RAM)\n"
                       << "  --no-jit         Disable JIT\n"
                       << "  Config file: pool.cfg\n";
             exit(0);
@@ -206,6 +214,7 @@ MinerConfig Config::parse(int argc, char* argv[]) {
     if (envFullMem2 && envFullMem2[0] != '\0') {
         std::string fm = envFullMem2;
         cfg.fullMem = (fm != "0" && fm != "false" && fm != "no");
+        cfg.fullMemAuto = false;
     }
     if (envLargePages2 && envLargePages2[0] != '\0') {
         std::string lp = envLargePages2;
@@ -222,6 +231,21 @@ MinerConfig Config::parse(int argc, char* argv[]) {
         if (p.wallet.empty()) {
             std::cerr << "[Config] No wallet configured! Use -u or set in pool.cfg" << std::endl;
             exit(1);
+        }
+    }
+    
+    // FULL_MEM auto-detect from available RAM (dataset needs ~2.6GiB)
+    if (cfg.fullMemAuto) {
+        long pages = sysconf(_SC_PHYS_PAGES);
+        long pageSize = sysconf(_SC_PAGESIZE);
+        if (pages > 0 && pageSize > 0) {
+            double ramGiB = (double)pages * pageSize / (1024.0 * 1024.0 * 1024.0);
+            cfg.fullMem = (ramGiB >= 3.5);
+            std::cout << "[Config] FULL_MEM auto: " << ramGiB << " GiB RAM -> "
+                      << (cfg.fullMem ? "full dataset" : "light (under 3.5 GiB)")
+                      << std::endl;
+        } else {
+            cfg.fullMem = false;
         }
     }
     
