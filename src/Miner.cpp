@@ -177,6 +177,7 @@ void Miner::start(const MinerConfig& cfg) {
     m_client->setJobCallback([this](const Job& job) { onNewJob(job); });
     m_client->setResultCallback([this](bool ok, const std::string& msg) { onShareResult(ok, msg); });
     m_client->setHashrateProvider([this]() { return m_lastHashrate.load(std::memory_order_relaxed); });
+    m_client->setSubmitIntervalMs(cfg.submitIntervalMs);
     m_client->connect();
 
     // --- Stats printer thread ---
@@ -229,9 +230,11 @@ void Miner::onNewJob(const Job& job) {
         return;
     }
 
+    Job j = job;
+    j.seq = m_jobSeq.fetch_add(1, std::memory_order_relaxed) + 1;
     std::lock_guard<std::mutex> lock(m_jobMutex);
-    m_jobStorage = job;
-    m_currentJobId = job.jobId;
+    m_jobStorage = j;
+    m_currentJobId = j.jobId;
     
     // Recompute header hex from parsed bytes (for submission)
     m_currentHeaderHex = bytes_to_hex(job.header.data(), (int)job.header.size());
@@ -293,13 +296,17 @@ void Miner::workerLoop(Worker* w) {
     int idleSpins = 0;
     
     // Immediate test: hash even without job (warmup)
+    auto warmupStart = std::chrono::steady_clock::now();
     uint8_t dummy_in[40] = {0};
     uint8_t dummy_seed[64];
     uint8_t dummy_out[32];
     sha3_512(dummy_in, 40, dummy_seed);
     randomx_calculate_hash(w->vm, dummy_seed, 64, dummy_out);
     w->totalHashes = 1;
-    std::cout << "[Worker " << w->index << "] warmup hash OK" << std::endl;
+    auto warmupMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - warmupStart).count();
+    std::cout << "[Worker " << w->index << "] warmup hash OK (" << warmupMs << " ms)"
+              << std::endl;
 
     while (m_running) {
         // --- Snapshot current job under the job lock ---
@@ -311,9 +318,11 @@ void Miner::workerLoop(Worker* w) {
         int snapTargetUsed;
         uint8_t snapMsb8[8];
         bool snapUseFull;
+        int snapSeq;
         {
             std::lock_guard<std::mutex> lock(m_jobMutex);
             snapshot = m_jobStorage;
+            snapSeq = snapshot.seq;
             snapHeaderHex = m_currentHeaderHex;
             memcpy(snapTarget, m_targetBytes, 32);
             snapTargetUsed = m_targetBytesUsed;
@@ -336,6 +345,8 @@ void Miner::workerLoop(Worker* w) {
                                                       std::memory_order_relaxed);
 
         for (int i = 0; i < BLOCKSIZE && m_running; i++) {
+            if (m_jobSeq.load(std::memory_order_relaxed) - snapSeq >= STALE_JOB_LIMIT)
+                break;   // job already advanced — don't burn hashes on a dead header
             uint64_t nonce = nonceBase + i;
 
             // Build blob: header(32) + nonce LE(8) = 40 bytes
@@ -371,7 +382,19 @@ void Miner::workerLoop(Worker* w) {
                               << std::endl;
 
                 if (m_client && m_client->isConnected()) {
-                    m_client->submitShare(snapHeaderHex, nonceHex, mixHex);
+                    int cur = m_jobSeq.load(std::memory_order_relaxed);
+                    if (cur - snapSeq >= STALE_JOB_LIMIT) {
+                        m_staleDropped.fetch_add(1, std::memory_order_relaxed);
+                        if (m_verboseShares)
+                            std::cout << "[Worker " << w->index
+                                      << "] drop stale share (job " << snapSeq
+                                      << ", now " << cur << ")" << std::endl;
+                    } else if (!m_client->submitShare(snapHeaderHex, nonceHex, mixHex)) {
+                        m_submitDropped.fetch_add(1, std::memory_order_relaxed);
+                        if (m_verboseShares)
+                            std::cout << "[Worker " << w->index
+                                      << "] drop share (rate-limited/offline)" << std::endl;
+                    }
                 }
             }
         }
@@ -406,8 +429,13 @@ void Miner::printStats() const {
     std::cout << "\n=== HASHRATE ==="
               << "\n  Total:  " << rate << " H/s"
               << "\n  Shares: " << m_acceptedShares << " accepted / "
-              << m_rejectedShares << " rejected"
-              << "\n  Workers: " << m_workers.size();
+              << m_rejectedShares << " rejected";
+    if (m_staleDropped.load(std::memory_order_relaxed) ||
+        m_submitDropped.load(std::memory_order_relaxed))
+        std::cout << " (" << m_staleDropped.load(std::memory_order_relaxed)
+                  << " stale / " << m_submitDropped.load(std::memory_order_relaxed)
+                  << " rate-limited dropped)";
+    std::cout << "\n  Workers: " << m_workers.size();
     for (auto& w : m_workers) {
         double wr = static_cast<double>(w->totalHashes) / sec;
         std::cout << "\n    W" << w->index << ": " << wr << " H/s (" 

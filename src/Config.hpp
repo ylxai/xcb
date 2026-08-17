@@ -19,6 +19,7 @@ struct MinerConfig {
     bool fullMemAuto = true;    // true = pick full/light from available RAM
     bool hardAES = true;
     bool largePages = true;
+    int submitIntervalMs = 0;     // 0 = unlimited (default); set to protect against strict pools
 };
 
 class Config {

@@ -8,6 +8,7 @@
 #include <atomic>
 #include <vector>
 #include <cstdint>
+#include <chrono>
 
 struct PoolInfo {
     std::string host;
@@ -24,6 +25,7 @@ struct Job {
     std::string targetHex;         // hex target
     uint64_t targetInt = 0x00ffffffffffffffULL;
     bool clean = true;
+    int seq = 0;              // monotonically increasing job version (Miner)
 };
 
 class StratumClient {
@@ -42,6 +44,7 @@ public:
     void setResultCallback(std::function<void(bool, const std::string&)> cb) { m_onResult = cb; }
     void setPools(const std::vector<PoolInfo>& pools);
     void setHashrateProvider(std::function<double()> cb) { m_hashrateProvider = cb; }
+    void setSubmitIntervalMs(int ms) { m_submitIntervalMs.store(ms, std::memory_order_relaxed); }
 
 private:
     void run();
@@ -75,6 +78,9 @@ private:
     int m_connectFails = 0;
     std::function<double()> m_hashrateProvider;
     uint64_t m_workerIdHex = 0;
+    std::atomic<int> m_submitIntervalMs{100};   // min ms between submits (0 = off)
+    std::mutex m_rateMutex;
+    std::chrono::steady_clock::time_point m_lastSubmitTime{};
     uint64_t m_pendingGetWorkId = 0;
     uint64_t m_loginId = 0;
     bool m_socketDead = false;

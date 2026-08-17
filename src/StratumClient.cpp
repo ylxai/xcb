@@ -506,6 +506,17 @@ bool StratumClient::submitShare(const std::string& headerHex,
                                 const std::string& mixHashHex) {
     if (!m_running || m_sock < 0) return false;
 
+    // Rate-limit: drop shares closer than the configured interval (anti-ban)
+    if (m_submitIntervalMs.load(std::memory_order_relaxed) > 0) {
+        std::lock_guard<std::mutex> lock(m_rateMutex);
+        auto now = std::chrono::steady_clock::now();
+        if (m_lastSubmitTime.time_since_epoch().count() != 0 &&
+            now - m_lastSubmitTime <
+                std::chrono::milliseconds(m_submitIntervalMs.load(std::memory_order_relaxed)))
+            return false;   // share silently dropped — better than flooding the pool
+        m_lastSubmitTime = now;
+    }
+
     std::string h = (headerHex.substr(0, 2) == "0x") ? headerHex : "0x" + headerHex;
     std::string n = (nonceHex.substr(0, 2) == "0x") ? nonceHex : "0x" + nonceHex;
     std::string m = (mixHashHex.substr(0, 2) == "0x") ? mixHashHex : "0x" + mixHashHex;
