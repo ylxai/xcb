@@ -45,6 +45,27 @@ inline int hex_to_target_bytes(const std::string& hex, uint8_t out[32], bool* ok
     return bytes;
 }
 
+// Full 256-bit target compare (big-endian hash <= target), shared by
+// workerLoop (hot path) and selftest — same code, no divergence.
+inline bool full_target_meets(const uint8_t hash[32], const uint8_t target[32], int used) {
+    for (int b = 0; b < used; b++) {
+        if (hash[b] < target[b]) return true;
+        if (hash[b] > target[b]) return false;
+    }
+    return true;  // equal
+}
+
+// ethproxy 64-bit MSB compare (hash MSB < target MSB), shared by
+// workerLoop (hot path) and selftest.
+inline bool msb8_target_meets(const uint8_t hash[32], const uint8_t msb8[8]) {
+    uint64_t hv = 0, tv = 0;
+    for (int b = 0; b < 8; b++) {
+        hv = (hv << 8) | hash[b];
+        tv = (tv << 8) | msb8[b];
+    }
+    return hv < tv;
+}
+
 // 8-byte MSB of the target as delivered (left-aligned in the hex string),
 // right-padded with zeros. Used for the ethproxy 64-bit share check.
 // Sets *ok=false when the hex string contains non-hex characters.

@@ -247,7 +247,7 @@ sudo chrt -rr 1 ./miner-saya
 - [x] **LARGE_PAGES auto-detect** + honor `useJIT`/`hardAES` config
 - [x] **Fix env parsing** — env vars tidak ditimpa config file; aman terhadap string kosong
 - [x] **Fase 2 — Correctness**: submit dengan header job milik share ✅, target compare dual-mode (full 256-bit & ethproxy 64-bit MSB) ✅, `--selftest` (20 checks) ✅
-  - Worker me-snapshot job (header+target) per batch; share disubmit dengan header job yang benar-benar di-hash (tanpa data race)
+  - Worker melakukan snapshot job (header+target) per batch; share di-submit dengan header job yang benar-benar di-hash (tanpa data race)
   - Target compare: stratum 64-hex = big-endian 32-byte; ethproxy 60-hex = 64-bit MSB (persis validasi pool)
   - `--selftest`: verifikasi parse target (valid/invalid/ganjil), compare less/equal/greater, blob header+nonce LE, nonce BE — exit code 0/1
 - [x] **Fase 3 — Performance**: auto FULL_MEM dari RAM ✅, AVX-512 evaluation (RandomY tidak punya jalur AVX-512) ✅, benchmark vs upstream ✅

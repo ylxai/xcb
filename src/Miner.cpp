@@ -353,21 +353,9 @@ void Miner::workerLoop(Worker* w) {
             //  - ethproxy (short target): 64-bit compare of hash MSB vs
             //    target MSB, exactly how the pool validates shares
             //  - stratum (full 256-bit target): big-endian hash <= target
-            bool meetsTarget;
-            if (snapUseFull) {
-                meetsTarget = true;
-                for (int b = 0; b < snapTargetUsed; b++) {
-                    if (hashout[b] < snapTarget[b]) break;
-                    if (hashout[b] > snapTarget[b]) { meetsTarget = false; break; }
-                }
-            } else {
-                uint64_t hv = 0, tv = 0;
-                for (int b = 0; b < 8; b++) {
-                    hv = (hv << 8) | hashout[b];
-                    tv = (tv << 8) | snapMsb8[b];
-                }
-                meetsTarget = (hv < tv);
-            }
+            bool meetsTarget = snapUseFull
+                ? full_target_meets(hashout, snapTarget, snapTargetUsed)
+                : msb8_target_meets(hashout, snapMsb8);
 
             if (meetsTarget) {
                 // SHARE FOUND! Submit via Stratum

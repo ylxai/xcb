@@ -18,25 +18,6 @@ void check(bool cond, const char* name) {
     }
 }
 
-// Full 256-bit target compare (big-endian hash <= target), mirror of hot path.
-bool full_target_meets(const uint8_t hash[32], const uint8_t target[32], int used) {
-    for (int b = 0; b < used; b++) {
-        if (hash[b] < target[b]) return true;
-        if (hash[b] > target[b]) return false;
-    }
-    return true;  // equal
-}
-
-// ethproxy 64-bit MSB compare (hash MSB < target MSB), mirror of hot path.
-bool msb8_target_meets(const uint8_t hash[32], const uint8_t msb8[8]) {
-    uint64_t hv = 0, tv = 0;
-    for (int b = 0; b < 8; b++) {
-        hv = (hv << 8) | hash[b];
-        tv = (tv << 8) | msb8[b];
-    }
-    return hv < tv;
-}
-
 }  // namespace
 
 bool run_selftest() {
