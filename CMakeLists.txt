@@ -27,6 +27,7 @@ set(MINER_SOURCES
     src/StratumClient.cpp
     src/Miner.cpp
     src/Config.cpp
+    src/selftest.cpp
 )
 
 set(MINER_HEADERS

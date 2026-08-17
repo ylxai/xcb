@@ -1,4 +1,5 @@
 #include "Miner.hpp"
+#include "encoding.hpp"
 #include <iostream>
 #include <cstring>
 #include <algorithm>
@@ -18,19 +19,6 @@ static void sha3_512(const uint8_t* input, size_t len, uint8_t output[64]) {
     gen(input, input + len, output, output + 64);
 }
 
-// ============================================================
-// Hex helpers
-// ============================================================
-static std::string bytes_to_hex(const uint8_t* data, int len) {
-    static const char hex[] = "0123456789abcdef";
-    std::string s;
-    s.resize(len * 2);
-    for (int i = 0; i < len; i++) {
-        s[i*2]   = hex[(data[i] >> 4) & 0xf];
-        s[i*2+1] = hex[data[i] & 0xf];
-    }
-    return s;
-}
 
 // ============================================================
 // Miner
@@ -227,61 +215,14 @@ void Miner::stop() {
 
 bool Miner::isRunning() const { return m_running; }
 
-static int parse_target_bytes(const std::string& hex, uint8_t out[32], bool* ok) {
-    memset(out, 0, 32);
-    std::string t = hex;
-    if (t.size() >= 2 && t[0] == '0' && (t[1] == 'x' || t[1] == 'X')) t = t.substr(2);
-    int hexLen = (int)t.size();
-    int bytes = 0;
-    for (int i = 0; i < 32; i++) {
-        int hIdx = hexLen - 2 - 2 * i;  // nibbles from the right (big-endian)
-        if (hIdx < 0) break;
-        auto hexval = [](char c) -> int {
-            if (c >= '0' && c <= '9') return c - '0';
-            if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-            if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-            return -1;
-        };
-        int hi = hexval(t[hIdx]);
-        int lo = hexval(t[hIdx + 1]);
-        if (hi < 0 || lo < 0) { *ok = false; return 0; }
-        out[31 - i] = (uint8_t)((hi << 4) | lo);
-        bytes++;
-    }
-    return bytes;
-}
-
-// 8-byte MSB of the target as delivered (left-aligned in the hex string),
-// right-padded with zeros. Used for the ethproxy 64-bit share check.
-// Sets *ok=false when the hex string contains non-hex characters.
-static void parse_target_msb8(const std::string& hex, uint8_t out[8], bool* ok) {
-    memset(out, 0, 8);
-    std::string t = hex;
-    if (t.size() >= 2 && t[0] == '0' && (t[1] == 'x' || t[1] == 'X')) t = t.substr(2);
-    for (int i = 0; i < 8; i++) {
-        int hIdx = 2 * i;
-        if (hIdx + 1 >= (int)t.size()) break;
-        auto hexval = [](char c) -> int {
-            if (c >= '0' && c <= '9') return c - '0';
-            if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-            if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-            return -1;
-        };
-        int hi = hexval(t[hIdx]);
-        int lo = hexval(t[hIdx + 1]);
-        if (hi < 0 || lo < 0) { *ok = false; return; }
-        out[i] = (uint8_t)((hi << 4) | lo);
-    }
-}
-
 void Miner::onNewJob(const Job& job) {
     // Parse target first; reject malformed targets without touching the
     // current job (workers keep mining the previous valid one).
     uint8_t tmpBytes[32];
     uint8_t tmpMsb8[8];
     bool ok = true;
-    int used = parse_target_bytes(job.targetHex, tmpBytes, &ok);
-    parse_target_msb8(job.targetHex, tmpMsb8, &ok);
+    int used = hex_to_target_bytes(job.targetHex, tmpBytes, &ok);
+    hex_to_target_msb8(job.targetHex, tmpMsb8, &ok);
     if (!ok || used == 0) {
         std::cerr << "[Miner] Invalid target from pool, keeping previous job"
                   << std::endl;
@@ -412,21 +353,9 @@ void Miner::workerLoop(Worker* w) {
             //  - ethproxy (short target): 64-bit compare of hash MSB vs
             //    target MSB, exactly how the pool validates shares
             //  - stratum (full 256-bit target): big-endian hash <= target
-            bool meetsTarget;
-            if (snapUseFull) {
-                meetsTarget = true;
-                for (int b = 0; b < snapTargetUsed; b++) {
-                    if (hashout[b] < snapTarget[b]) break;
-                    if (hashout[b] > snapTarget[b]) { meetsTarget = false; break; }
-                }
-            } else {
-                uint64_t hv = 0, tv = 0;
-                for (int b = 0; b < 8; b++) {
-                    hv = (hv << 8) | hashout[b];
-                    tv = (tv << 8) | snapMsb8[b];
-                }
-                meetsTarget = (hv < tv);
-            }
+            bool meetsTarget = snapUseFull
+                ? full_target_meets(hashout, snapTarget, snapTargetUsed)
+                : msb8_target_meets(hashout, snapMsb8);
 
             if (meetsTarget) {
                 // SHARE FOUND! Submit via Stratum

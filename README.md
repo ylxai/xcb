@@ -246,7 +246,10 @@ sudo chrt -rr 1 ./miner-saya
 - [x] **Fase 1 — Protocol rewrite**: event loop, routing by id, `mining.notify`, atomic msg id, reconnect backoff, no blocking getWork
 - [x] **LARGE_PAGES auto-detect** + honor `useJIT`/`hardAES` config
 - [x] **Fix env parsing** — env vars tidak ditimpa config file; aman terhadap string kosong
-- [ ] **Fase 2 — Correctness**: double-buffer job per worker, submit dengan header job milik share, target compare 32-byte
+- [x] **Fase 2 — Correctness**: submit dengan header job milik share ✅, target compare dual-mode (full 256-bit & ethproxy 64-bit MSB) ✅, `--selftest` (20 checks) ✅
+  - Worker melakukan snapshot job (header+target) per batch; share di-submit dengan header job yang benar-benar di-hash (tanpa data race)
+  - Target compare: stratum 64-hex = big-endian 32-byte; ethproxy 60-hex = 64-bit MSB (persis validasi pool)
+  - `--selftest`: verifikasi parse target (valid/invalid/ganjil), compare less/equal/greater, blob header+nonce LE, nonce BE — exit code 0/1
 - [x] **Fase 3 — Performance**: auto FULL_MEM dari RAM ✅, AVX-512 evaluation (RandomY tidak punya jalur AVX-512) ✅, benchmark vs upstream ✅
   - Benchmark full 2 thread (sandbox 2 vCPU): **miner-saya 1530.4 H/s vs coreminer official 1483.7 H/s (+3.1%)**
   - coreminer official gagal negosiasi dengan pool catchthatrabbit (243x Invalid response, 0 share); miner-saya stabil 1696 accepted / 0 rejected
@@ -290,6 +293,8 @@ xcb/
     ├── StratumClient.hpp/.cpp # Protocol client — single event loop, routing by id
     ├── Miner.hpp/.cpp       # Thread pool, VM management, mining loop, stats
     └── picosha3.h           # SHA3-512 (header-only, stack-based)
+    ├── encoding.hpp         # hex <-> byte + target parsing (shared Miner/selftest)
+    ├── selftest.cpp/.h      # --selftest: 20 checks target compare & encoding
 ```
 
 ---
