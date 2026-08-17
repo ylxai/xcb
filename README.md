@@ -293,6 +293,8 @@ xcb/
     ├── StratumClient.hpp/.cpp # Protocol client — single event loop, routing by id
     ├── Miner.hpp/.cpp       # Thread pool, VM management, mining loop, stats
     └── picosha3.h           # SHA3-512 (header-only, stack-based)
+    ├── encoding.hpp         # hex <-> byte + target parsing (shared Miner/selftest)
+    ├── selftest.cpp/.h      # --selftest: 20 checks target compare & encoding
 ```
 
 ---
