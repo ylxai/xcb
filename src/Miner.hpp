@@ -44,12 +44,13 @@ private:
     std::vector<std::unique_ptr<Worker>> m_workers;
     int m_numThreads = 1;
     
-    // Mining state — job is swapped atomically
+    // Mining state — job snapshotted by workers under the same lock
     std::mutex m_jobMutex;
-    Job m_jobStorage;       // written under lock, read via pointer
-    std::atomic<Job*> m_jobp{nullptr};
-    
-    // Batch-friendly job data (pre-decoded, pre-parsed)
+    Job m_jobStorage;       // written under lock, read via snapshot
+    uint8_t m_targetBytes[32] = {};  // right-aligned big-endian, zero-padded
+    int m_targetBytesUsed = 8;      // significant bytes for full-256 compare
+    uint8_t m_targetMsb8[8] = {};   // 8-byte MSB as delivered (ethproxy 64-bit compare)
+    bool m_useFullTarget = false;   // true = 256-bit target (stratum), false = 64-bit MSB
     std::atomic<uint64_t> m_globalNonce{0};
     std::string m_currentJobId;
     std::string m_currentHeaderHex;
