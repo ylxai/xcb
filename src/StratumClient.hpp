@@ -9,6 +9,14 @@
 #include <vector>
 #include <cstdint>
 
+struct PoolInfo {
+    std::string host;
+    uint16_t port = 8008;
+    std::string wallet;
+    std::string worker;
+    std::string password = "x";
+};
+
 struct Job {
     std::string jobId;
     std::vector<uint8_t> header;  // 32 bytes binary
@@ -32,6 +40,8 @@ public:
                      const std::string& mixHashHex);
     void setJobCallback(std::function<void(const Job&)> cb) { m_onJob = cb; }
     void setResultCallback(std::function<void(bool, const std::string&)> cb) { m_onResult = cb; }
+    void setPools(const std::vector<PoolInfo>& pools);
+    void setHashrateProvider(std::function<double()> cb) { m_hashrateProvider = cb; }
 
 private:
     void run();
@@ -44,6 +54,8 @@ private:
     void processJob(const std::string& jobId, const std::string& header,
                     const std::string& seed, const std::string& target);
     void reconnect();
+    void applyPool(size_t idx);
+    void switchToNextPool();
     
     std::string m_host;
     uint16_t m_port;
@@ -58,6 +70,11 @@ private:
     std::mutex m_sendMutex;
     std::mutex m_recvMutex;
     std::atomic<uint64_t> m_msgId{1};
+    std::vector<PoolInfo> m_pools;
+    size_t m_poolIndex = 0;
+    int m_connectFails = 0;
+    std::function<double()> m_hashrateProvider;
+    uint64_t m_workerIdHex = 0;
     uint64_t m_pendingGetWorkId = 0;
     uint64_t m_loginId = 0;
     bool m_socketDead = false;

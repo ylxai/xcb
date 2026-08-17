@@ -173,13 +173,22 @@ void Miner::start(const MinerConfig& cfg) {
     
     m_running = true;
 
-    // --- Stratum client ---
+    // --- Stratum client (multi-pool failover) ---
     auto& pool = cfg.pools[0];
     m_client = std::make_unique<StratumClient>(
         pool.host, pool.port, pool.wallet, pool.worker, pool.password
     );
+    std::vector<PoolInfo> pools;
+    for (const auto& p : cfg.pools) {
+        PoolInfo pi;
+        pi.host = p.host; pi.port = p.port; pi.wallet = p.wallet;
+        pi.worker = p.worker; pi.password = p.password;
+        pools.push_back(pi);
+    }
+    m_client->setPools(pools);
     m_client->setJobCallback([this](const Job& job) { onNewJob(job); });
     m_client->setResultCallback([this](bool ok, const std::string& msg) { onShareResult(ok, msg); });
+    m_client->setHashrateProvider([this]() { return m_lastHashrate.load(std::memory_order_relaxed); });
     m_client->connect();
 
     // --- Stats printer thread ---
@@ -463,6 +472,7 @@ void Miner::printStats() const {
     for (auto& w : m_workers) total += w->totalHashes;
 
     double rate = static_cast<double>(total) / sec;
+    m_lastHashrate.store(rate, std::memory_order_relaxed);
 
     std::cout << "\n=== HASHRATE ==="
               << "\n  Total:  " << rate << " H/s"

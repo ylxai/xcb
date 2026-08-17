@@ -34,7 +34,9 @@ docker run --rm -d --name xcb \
 ```
 
 > **Tips:** `LARGE_PAGES` kini **auto-detect** — jika huge pages tidak tersedia (mis. container tanpa mlock), miner otomatis fallback ke normal pages tanpa crash. Set `LARGE_PAGES=0` hanya untuk memaksa nonaktif.
-> `FULL_MEM=0` (light, 256MB) disarankan untuk VPS kecil — full mode butuh ~2.6GB RAM dan inisialisasi dataset ~56s.
+> FULL_MEM kini **auto-detect dari RAM**: `>= 3.5 GiB` → full dataset, di bawahnya light (256MB).
+> Set `FULL_MEM=0` (light) atau `FULL_MEM=1` (full) untuk override, atau flag `--light`/`--full`.
+> Full mode butuh ~2.6GB RAM + inisialisasi dataset ~56s.
 
 ---
 
@@ -48,7 +50,7 @@ Semua env vars dibaca langsung (precedence ≥ config file & CLI):
 | `POOL` | `sg.catchthatrabbit.com:8008` | Host pool `host:port` |
 | `WORKER` | `pool` | Nama worker (ditampilkan pool sebagai `wallet.worker`) |
 | `THREADS` | *(kosong)* | Jumlah thread. **Kosong = auto (jumlah CPU cores)** |
-| `FULL_MEM` | `0` | `1` = dataset full 2.6GB, `0`/`false` = light 256MB |
+| `FULL_MEM` | *(auto)* | `1`/`true` = full 2.6GB, `0`/`false` = light 256MB, kosong/unset = auto dari RAM (>=3.5GiB) |
 | `LARGE_PAGES` | *(auto)* | `1` = paksa huge pages, `0` = nonaktif, kosong = auto-detect (fallback normal pages) |
 | `LOG_SHARES` | *(false)* | `1` = print setiap share found/accepted (default quiet — pool difficulty rendah sangat noisy) |
 
@@ -82,6 +84,7 @@ make -j$(nproc)
 ./miner-saya                        # auto threads, lihat pool.cfg / env
 ./miner-saya -t 4                   # 4 thread
 ./miner-saya --light -t 1           # 1 thread light mode
+./miner-saya --full -t 2            # force full dataset (default: auto by RAM)
 ./miner-saya -o pool.lain.com:8008 -u wallet.worker   # override pool+wallet
 ```
 
@@ -102,7 +105,7 @@ light=true
 ```
 
 > Precedence: **env vars > pool.cfg > CLI flags**. `WALLET`+`POOL` env aktif = pool.cfg diabaikan.
-> Commands flag: `-o host:port`, `-u wallet[.worker]`, `-p password`, `-t N`, `--light`, `--no-jit`, `-h`.
+> Commands flag: `-o host:port`, `-u wallet[.worker]`, `-p password`, `-t N`, `--light`, `--full`, `--no-jit`, `-h`.
 
 ---
 
@@ -244,8 +247,13 @@ sudo chrt -rr 1 ./miner-saya
 - [x] **LARGE_PAGES auto-detect** + honor `useJIT`/`hardAES` config
 - [x] **Fix env parsing** — env vars tidak ditimpa config file; aman terhadap string kosong
 - [ ] **Fase 2 — Correctness**: double-buffer job per worker, submit dengan header job milik share, target compare 32-byte
-- [ ] **Fase 3 — Performance**: auto FULL_MEM dari RAM, AVX-512 evaluation, benchmark vs upstream
-- [ ] **Fase 4 — Ops**: failover pool list, `eth_submitHashrate`, Docker polish
+- [x] **Fase 3 — Performance**: auto FULL_MEM dari RAM ✅, AVX-512 evaluation (RandomY tidak punya jalur AVX-512) ✅, benchmark vs upstream ✅
+  - Benchmark full 2 thread (sandbox 2 vCPU): **miner-saya 1530.4 H/s vs coreminer official 1483.7 H/s (+3.1%)**
+  - coreminer official gagal negosiasi dengan pool catchthatrabbit (243x Invalid response, 0 share); miner-saya stabil 1696 accepted / 0 rejected
+- [x] **Fase 4 — Ops**: failover pool list ✅, `eth_submitHashrate` ✅, Docker polish ✅
+  - Failover: pool.cfg multi-pool (`server[N]`/`port[N]`) — 3x login gagal → pindah pool otomatis; teruji: pool mati → failover ke pool 2 → mining normal
+  - `eth_submitHashrate` dikirim tiap 60s (hashrate + worker id) — pool ethproxy dapat melihat hashrate
+  - Dockerfile: `FULL_MEM` kini auto (bukan force 0), komentar multi-pool
 
 ---
 
