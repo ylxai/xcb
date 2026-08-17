@@ -72,6 +72,8 @@ MinerConfig Config::loadFile(const std::string& path) {
             pool.port = static_cast<uint16_t>(std::stoul(val));
         } else if (key == "threads") {
             cfg.threads = std::stoi(val);
+        } else if (key == "submit-interval-ms") {
+            cfg.submitIntervalMs = std::stoi(val);
         } else if (key == "no_jit") {
             cfg.useJIT = (val != "true" && val != "1" && val != "yes");
         } else if (key == "light") {
@@ -182,6 +184,8 @@ MinerConfig Config::parse(int argc, char* argv[]) {
             
         } else if (arg == "-t" && i + 1 < argc) {
             cfg.threads = std::stoi(argv[++i]);
+        } else if (arg == "--submit-interval-ms" && i + 1 < argc) {
+            cfg.submitIntervalMs = std::stoi(argv[++i]);
             
         } else if (arg == "--light") {
             cfg.fullMem = false;

@@ -53,8 +53,12 @@ private:
     uint8_t m_targetMsb8[8] = {};   // 8-byte MSB as delivered (ethproxy 64-bit compare)
     bool m_useFullTarget = false;   // true = 256-bit target (stratum), false = 64-bit MSB
     std::atomic<uint64_t> m_globalNonce{0};
+    std::atomic<int> m_jobSeq{0};        // bumped on every new job
+    static constexpr int STALE_JOB_LIMIT = 3;  // drop shares older than N jobs
     std::string m_currentJobId;
     std::string m_currentHeaderHex;
+    mutable std::atomic<uint64_t> m_staleDropped{0};
+    mutable std::atomic<uint64_t> m_submitDropped{0};
     
     // Stats
     mutable std::mutex m_statsMutex;
