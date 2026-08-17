@@ -115,6 +115,7 @@ MinerConfig Config::parse(int argc, char* argv[]) {
         cfg.largePages = (lp != "0" && lp != "false" && lp != "no");
     }
     
+    bool envPoolUsed = false;
     if (envWallet && envPool) {
         PoolConfig p;
         std::string poolStr = envPool;
@@ -134,15 +135,18 @@ MinerConfig Config::parse(int argc, char* argv[]) {
         if (cfg.threads <= 0)
             cfg.threads = std::max(1, static_cast<int>(sysconf(_SC_NPROCESSORS_ONLN)));
         std::cout << "[Config] Using env: POOL=" << envPool << " WALLET=" << envWallet << std::endl;
-        return cfg;  // Skip file parsing if env vars present
+        envPoolUsed = true;  // env WALLET+POOL menang; jangan return agar auto-detect FULL_MEM tetap jalan
     }
     
-    // 2. Try loading pool.cfg
-    cfg = loadFile("pool.cfg");
-    if (cfg.pools.empty()) cfg = loadFile("/miner/pool.cfg");
-    if (cfg.pools.empty()) cfg = loadFile("~/xcb/pool.cfg");
+    // 2. Try loading pool.cfg (skip bila env POOL/WALLET dipakai)
+    if (!envPoolUsed) {
+        cfg = loadFile("pool.cfg");
+        if (cfg.pools.empty()) cfg = loadFile("/miner/pool.cfg");
+        if (cfg.pools.empty()) cfg = loadFile("~/xcb/pool.cfg");
+    }
     
-    // Parse CLI args (override file)
+    // Parse CLI args (override file) - di-skip bila env pool dipakai (env menang)
+    if (!envPoolUsed) {
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
         
@@ -203,6 +207,7 @@ MinerConfig Config::parse(int argc, char* argv[]) {
             exit(0);
         }
     }
+    }
     
     // Apply wallet from file if CLI didn't override
     // (already done in loadFile)
@@ -234,7 +239,8 @@ MinerConfig Config::parse(int argc, char* argv[]) {
         }
     }
     
-    // FULL_MEM auto-detect from available RAM (dataset needs ~2.6GiB)
+    // FULL_MEM auto-detect from available RAM (dataset ~2.6GiB + headroom
+    // utk JIT/scratch -> threshold container >= 3.5GiB RAM)
     if (cfg.fullMemAuto) {
         long pages = sysconf(_SC_PHYS_PAGES);
         long pageSize = sysconf(_SC_PAGESIZE);
