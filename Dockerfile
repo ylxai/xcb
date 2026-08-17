@@ -14,8 +14,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /build
 COPY . .
 
-# Init submodule (context harus berisi .gitmodules + .git dari submodule)
-RUN git submodule update --init --recursive
+# Init submodule RandomY — tidak bergantung .git di build context
+# (bekerja juga saat build dari archive/ZIP tanpa folder .git)
+RUN if [ -d external/RandomY/.git ] || [ -f external/RandomY/src/randomx.h ]; then \
+        git submodule update --init --recursive; \
+    else \
+        git clone https://github.com/core-coin/RandomY.git external/RandomY && \
+        git -C external/RandomY checkout c9d185a055b7604e8d58059031e0e33dfe577cc5; \
+    fi
 
 RUN mkdir -p build && cd build && \
     cmake .. -DCMAKE_BUILD_TYPE=Release && \
@@ -51,7 +57,7 @@ ENV WALLET=cb23d6d8557e776f5ff9ab6a7fb7f59a3d385245fa7a
 ENV POOL=sg.catchthatrabbit.com:8008
 ENV WORKER=pool
 ENV THREADS=
-ENV FULL_MEM=
+ENV FULL_MEM=0
 ENV LARGE_PAGES=0
 
 ENTRYPOINT ["./miner-saya"]

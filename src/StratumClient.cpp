@@ -9,6 +9,8 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <atomic>
+#include <algorithm>
 
 static std::string json_escape(const std::string& s) {
     std::string out;
@@ -35,8 +37,8 @@ static std::string json_find_str(const std::string& json, const std::string& key
     return val;
 }
 
-static std::string json_result_array(const std::string& json, int idx) {
-    auto pos = json.find("\"result\"");
+static std::string json_array_elem(const std::string& json, const std::string& key, int idx) {
+    auto pos = json.find('"' + key + '"');
     if (pos == std::string::npos) return "";
     pos = json.find('[', pos);
     if (pos == std::string::npos) return "";
@@ -56,7 +58,7 @@ static std::string json_result_array(const std::string& json, int idx) {
                     val += json[pos++];
                 }
                 return val;
-            } else if (json[pos] == '-' || json[pos] == '+' || 
+            } else if (json[pos] == '-' || json[pos] == '+' ||
                       (json[pos] >= '0' && json[pos] <= '9')) {
                 std::string num;
                 while (pos < json.size() && (json[pos] == '-' || json[pos] == '+' ||
@@ -77,7 +79,7 @@ static bool json_is_true(const std::string& json) {
     if (pos == std::string::npos) return false;
     pos = json.find(':', pos + 7);
     if (pos == std::string::npos) return false;
-    pos++;  // skip ':'
+    pos++;
     while (pos < json.size() && json[pos] == ' ') pos++;
     return json.substr(pos, 4) == "true";
 }
@@ -94,11 +96,21 @@ static uint64_t json_id_val(const std::string& json) {
     return id;
 }
 
+static std::string strip_0x(const std::string& s) {
+    if (s.size() >= 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X'))
+        return s.substr(2);
+    return s;
+}
+
+static std::string get_method(const std::string& line) {
+    return json_find_str(line, "method");
+}
+
 // ------------------------------------------------------------
 StratumClient::StratumClient(const std::string& host, uint16_t port,
                              const std::string& wallet, const std::string& worker,
                              const std::string& password)
-    : m_host(host), m_port(port), m_wallet(wallet), 
+    : m_host(host), m_port(port), m_wallet(wallet),
       m_worker(worker), m_password(password) {
     m_workerName = wallet + "." + worker;
 }
@@ -131,7 +143,7 @@ std::string StratumClient::recvLine(double timeoutSec) {
         if (ret <= 0) return "";
         char buf[8192];
         ssize_t n = ::recv(m_sock, buf, sizeof(buf)-1, 0);
-        if (n <= 0) return "";
+        if (n <= 0) { m_socketDead = true; return ""; }
         buf[n] = 0;
         m_recvBuf += std::string(buf, n);
     }
@@ -151,7 +163,7 @@ void StratumClient::disconnect() {
 
 void StratumClient::connect() {
     if (m_running) return;
-    
+
     std::string portStr = std::to_string(m_port);
     struct addrinfo hints, *res = nullptr;
     memset(&hints, 0, sizeof(hints));
@@ -164,11 +176,11 @@ void StratumClient::connect() {
     }
     int fd = ::socket(res->ai_family, res->ai_socktype, res->ai_protocol);
     if (fd < 0) { ::freeaddrinfo(res); return; }
-    
+
     ::fcntl(fd, F_SETFL, O_NONBLOCK);
     ::connect(fd, res->ai_addr, res->ai_addrlen);
     ::freeaddrinfo(res);
-    
+
     struct pollfd pfd = {fd, POLLOUT, 0};
     if (::poll(&pfd, 1, 10000) <= 0) { ::close(fd); return; }
     int soError = 0;
@@ -176,24 +188,27 @@ void StratumClient::connect() {
     ::getsockopt(fd, SOL_SOCKET, SO_ERROR, &soError, &errLen);
     if (soError != 0) { ::close(fd); return; }
     ::fcntl(fd, F_SETFL, 0);
-    
+
     m_sock = fd;
     m_recvBuf.clear();
+    m_socketDead = false;
     m_running = true;
     std::cout << "[Stratum] Connected to " << m_host << ":" << m_port << std::endl;
-    
+
     m_thread = std::thread(&StratumClient::run, this);
 }
 
 void StratumClient::run() {
     int reconnectDelay = 2;
-    
+
     while (m_running) {
-        m_msgId = 1;
-        
-        // Step 1: eth_submitLogin
+        m_msgId.store(1, std::memory_order_relaxed);
+        m_socketDead = false;
+
+        // Step 1: eth_submitLogin (blocking, before event loop)
         if (!doEthLogin()) {
-            std::cerr << "[Stratum] Login failed, reconnecting in " << reconnectDelay << "s" << std::endl;
+            std::cerr << "[Stratum] Login failed, reconnecting in " << reconnectDelay << "s"
+                      << std::endl;
             std::this_thread::sleep_for(std::chrono::seconds(reconnectDelay));
             reconnectDelay = std::min(reconnectDelay * 2, 30);
             reconnect();
@@ -201,40 +216,41 @@ void StratumClient::run() {
         }
         reconnectDelay = 2;
         std::cout << "[Stratum] Authorized as " << m_workerName << std::endl;
-        
-        // Step 2: polling loop eth_getWork
-        auto lastPoll = std::chrono::steady_clock::now();
-        
-        while (m_running) {
-            // Check for incoming messages (share results, etc.)
-            std::string line = recvLine(0.1);  // 100ms poll
-            
-            if (line.empty()) {
-                // Timeout — check if we need to poll for new work
-                auto now = std::chrono::steady_clock::now();
-                auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - lastPoll).count();
-                
-                if (elapsed >= 3) {  // Poll every 3 seconds
-                    if (!doEthGetWork()) {
-                        std::cerr << "[Stratum] getWork failed" << std::endl;
-                        break;
-                    }
-                    lastPoll = now;
-                }
+
+        // Step 2: single event loop — poll socket, route every line by id,
+        // and issue eth_getWork on a timer. Never block on a single response,
+        // never disconnect because of an unexpected line.
+        auto lastPoll = std::chrono::steady_clock::now() - std::chrono::seconds(10);
+        bool needJob = true;
+
+        while (m_running && !m_socketDead) {
+            std::string line = recvLine(0.1);
+            if (!line.empty()) {
+                handleResponse(line);
                 continue;
             }
-            
-            // Handle incoming line
-            handleResponse(line);
+            if (m_socketDead) break;
+
+            auto now = std::chrono::steady_clock::now();
+            auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - lastPoll).count();
+            if (needJob || elapsed >= 3) {
+                uint64_t id = m_msgId.fetch_add(1, std::memory_order_relaxed);
+                m_pendingGetWorkId = id;
+                sendLine("{\"id\":" + std::to_string(id) +
+                         ",\"method\":\"eth_getWork\",\"params\":[]}");
+                needJob = false;
+                lastPoll = now;
+            }
         }
-        
-        // Reconnect
-        std::cerr << "[Stratum] Disconnected, reconnecting in " << reconnectDelay << "s" << std::endl;
+
+        if (!m_running) break;
+        std::cerr << "[Stratum] Disconnected, reconnecting in " << reconnectDelay << "s"
+                  << std::endl;
         std::this_thread::sleep_for(std::chrono::seconds(reconnectDelay));
         reconnectDelay = std::min(reconnectDelay * 2, 30);
         reconnect();
     }
-    
+
     m_running = false;
     {
         std::lock_guard<std::mutex> lock(m_sendMutex);
@@ -245,8 +261,7 @@ void StratumClient::run() {
 void StratumClient::reconnect() {
     std::lock_guard<std::mutex> lock(m_sendMutex);
     if (m_sock >= 0) { ::close(m_sock); m_sock = -1; }
-    
-    // Re-resolve and connect
+
     std::string portStr = std::to_string(m_port);
     struct addrinfo hints, *res = nullptr;
     memset(&hints, 0, sizeof(hints));
@@ -271,34 +286,34 @@ void StratumClient::reconnect() {
     ::fcntl(fd, F_SETFL, 0);
     m_sock = fd;
     m_recvBuf.clear();
+    m_socketDead = false;
     std::cout << "[Stratum] Reconnected" << std::endl;
 }
 
 bool StratumClient::doEthLogin() {
-    std::string msg = "{\"id\":" + std::to_string(m_msgId++) + 
-                     ",\"method\":\"eth_submitLogin\",\"params\":[\"" + 
-                     json_escape(m_wallet) + "\"]}";
+    uint64_t id = m_msgId.fetch_add(1, std::memory_order_relaxed);
+    m_loginId = id;
+    std::string msg = "{\"id\":" + std::to_string(id) +
+                      ",\"method\":\"eth_submitLogin\",\"params\":[\"" +
+                      json_escape(m_wallet) + "\"]}";
     sendLine(msg);
-    
+
     std::string resp = recvLine(15.0);
     if (resp.empty()) return false;
-    
+
     std::cout << "[Stratum] Login raw: " << resp.substr(0, 300) << std::endl;
-    
-    // Simple check: if it contains "result":true, or result is an array/string
-    bool ok = (resp.find("\"result\":true") != std::string::npos);
+
+    bool ok = json_is_true(resp);
     if (!ok) {
-        // Some pools return result as hex address or array
         ok = (resp.find("\"result\":\"0x") != std::string::npos);
     }
     if (!ok) {
-        // Check if result is non-null (not an error)
         auto rPos = resp.find("\"result\"");
         if (rPos != std::string::npos) {
             auto colon = resp.find(':', rPos + 7);
             if (colon != std::string::npos) {
                 while (colon < resp.size() && resp[colon] == ' ') colon++;
-                ok = (colon < resp.size() && resp[colon] != 'n'); // not null
+                ok = (colon < resp.size() && resp[colon] != 'n');
             }
         }
     }
@@ -309,46 +324,24 @@ bool StratumClient::doEthLogin() {
     return ok;
 }
 
-// Strip "0x" or "0X" prefix from hex string
-static std::string strip_0x(const std::string& s) {
-    if (s.size() >= 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X'))
-        return s.substr(2);
-    return s;
-}
-
-bool StratumClient::doEthGetWork() {
-    std::string msg = "{\"id\":" + std::to_string(m_msgId++) + 
-                     ",\"method\":\"eth_getWork\",\"params\":[]}";
-    sendLine(msg);
-    
-    std::string resp = recvLine(10.0);
-    if (resp.empty()) return false;
-    
-    // Parse result array: [header, seed, target]
-    std::string header = strip_0x(json_result_array(resp, 0));
-    std::string seed = strip_0x(json_result_array(resp, 1));
-    std::string target = strip_0x(json_result_array(resp, 2));
-    
+// Build a Job out of header/seed/target (hex, no 0x) and dispatch if changed.
+void StratumClient::processJob(const std::string& jobId, const std::string& header,
+                               const std::string& seed, const std::string& target) {
     if (header.empty() || target.empty()) {
-        std::cerr << "[Stratum] Invalid getWork response" << std::endl;
-        return false;
+        std::cerr << "[Stratum] Invalid job (empty header/target)" << std::endl;
+        return;
     }
-    
-    // Check if header changed
     if (header == m_currentHeader && seed == m_currentSeed && target == m_currentTarget) {
-        return true; // Same job, skip
+        return; // same job, skip
     }
-    
+
     m_currentHeader = header;
     m_currentSeed = seed;
     m_currentTarget = target;
-    m_currentJobId = header.substr(0, 16);  // use first 16 hex chars as job ID
-    
+    m_currentJobId = jobId.empty() ? header.substr(0, 16) : jobId;
+
     Job job;
-    // Use header hash as job ID (first 16 chars of header hex)
-    job.jobId = header.substr(0, 16);
-    
-    // Parse header hex to bytes
+    job.jobId = m_currentJobId;
     job.header.clear();
     for (size_t i = 0; i + 1 < header.length(); i += 2) {
         job.header.push_back(static_cast<uint8_t>(
@@ -356,35 +349,83 @@ bool StratumClient::doEthGetWork() {
     }
     job.seedHex = seed;
     job.targetHex = target;
-    
-    // Parse target to uint64 (first 16 hex chars as BE)
     if (target.length() >= 16) {
-        std::string t = target.substr(0, 16);
-        job.targetInt = std::stoull(t, nullptr, 16);
+        job.targetInt = std::stoull(target.substr(0, 16), nullptr, 16);
     }
-    
-    std::cout << "[Stratum] New job: " << job.jobId 
+
+    std::cout << "[Stratum] New job: " << job.jobId
               << " header=" << header.substr(0, 12) << "..."
-              << " target=" << target.substr(0, 8) << "..."
-              << std::endl;
-    
+              << " target=" << target.substr(0, 8) << "..." << std::endl;
+
     if (m_onJob) m_onJob(job);
-    return true;
+}
+
+// Parse a mining.notify (or eth_getWork-style push) message.
+// Accepts both [header, seed, target] and [jobid, header, seed, target].
+void StratumClient::handleNotify(const std::string& line) {
+    std::string a0 = strip_0x(json_array_elem(line, "params", 0));
+    std::string a1 = strip_0x(json_array_elem(line, "params", 1));
+    std::string a2 = strip_0x(json_array_elem(line, "params", 2));
+    std::string a3 = strip_0x(json_array_elem(line, "params", 3));
+
+    if (a0.empty()) {
+        // Some ethproxy pushes put the job in "result"
+        a0 = strip_0x(json_array_elem(line, "result", 0));
+        a1 = strip_0x(json_array_elem(line, "result", 1));
+        a2 = strip_0x(json_array_elem(line, "result", 2));
+        a3 = strip_0x(json_array_elem(line, "result", 3));
+    }
+
+    if (a0.size() == 64) {
+        // [header, seed, target]
+        processJob("", a0, a1, a2);
+    } else if (a1.size() == 64) {
+        // [jobid, header, seed, target]
+        processJob(a0, a1, a2, a3);
+    } else {
+        std::cerr << "[Stratum] Unrecognized job notification" << std::endl;
+    }
 }
 
 void StratumClient::handleResponse(const std::string& line) {
     uint64_t id = json_id_val(line);
-    
-    if (id == 0) {
-        // Notification from pool (unlikely in ETHPROXY but handle)
-        std::string method = json_find_str(line, "method");
-        if (!method.empty()) {
+    std::string method = get_method(line);
+
+    // Notifications from pool
+    if (id == 0 && !method.empty()) {
+        if (method == "mining.notify") {
+            handleNotify(line);
+        } else if (method == "mining.set_difficulty") {
+            // Target always comes with the job itself; nothing to do here.
+            std::string d = json_array_elem(line, "params", 0);
+            std::cout << "[Stratum] set_difficulty: " << d << std::endl;
+        } else if (method == "client.get_version") {
+            sendLine("{\"id\":0,\"result\":\"miner-saya/v1.0\"}");
+        } else {
             std::cout << "[Stratum] Method: " << method << std::endl;
         }
         return;
     }
-    
-    // Share result check
+
+    // Response to our eth_getWork request
+    if (id != 0 && id == m_pendingGetWorkId) {
+        std::string header = strip_0x(json_array_elem(line, "result", 0));
+        std::string seed   = strip_0x(json_array_elem(line, "result", 1));
+        std::string target = strip_0x(json_array_elem(line, "result", 2));
+        if (header.empty() || target.empty()) {
+            // Not a getWork result (e.g. server reusing the id). Ignore.
+            return;
+        }
+        processJob("", header, seed, target);
+        return;
+    }
+
+    // Response to login
+    if (id != 0 && id == m_loginId) {
+        return; // already handled in doEthLogin
+    }
+
+    // Response to share submission (eth_submitWork)
     if (json_is_true(line)) {
         if (m_onResult) m_onResult(true, "");
     } else {
@@ -397,21 +438,20 @@ void StratumClient::handleResponse(const std::string& line) {
     }
 }
 
-bool StratumClient::submitShare(const std::string& headerHex, 
+bool StratumClient::submitShare(const std::string& headerHex,
                                 const std::string& nonceHex,
                                 const std::string& mixHashHex) {
     if (!m_running || m_sock < 0) return false;
-    
-    // eth_submitWork: nonce_hex, header_hash, mix_hash
-    // Ensure all params have 0x prefix
+
     std::string h = (headerHex.substr(0, 2) == "0x") ? headerHex : "0x" + headerHex;
     std::string n = (nonceHex.substr(0, 2) == "0x") ? nonceHex : "0x" + nonceHex;
     std::string m = (mixHashHex.substr(0, 2) == "0x") ? mixHashHex : "0x" + mixHashHex;
-    
+
+    uint64_t id = m_msgId.fetch_add(1, std::memory_order_relaxed);
     std::string params = "[\"" + n + "\",\"" + h + "\",\"" + m + "\"]";
-    std::string msg = "{\"id\":" + std::to_string(m_msgId++) + 
-                     ",\"method\":\"eth_submitWork\",\"params\":" + params + "}";
-    
+    std::string msg = "{\"id\":" + std::to_string(id) +
+                      ",\"method\":\"eth_submitWork\",\"params\":" + params + "}";
+
     sendLine(msg);
     return true;
 }

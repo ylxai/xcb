@@ -198,7 +198,21 @@ MinerConfig Config::parse(int argc, char* argv[]) {
     
     // Apply wallet from file if CLI didn't override
     // (already done in loadFile)
-    
+
+    // Re-apply env overrides AFTER file+CLI (precedence: env > pool.cfg > CLI)
+    const char* envFullMem2 = getenv("FULL_MEM");
+    const char* envLargePages2 = getenv("LARGE_PAGES");
+    const char* envThreads2 = getenv("THREADS");
+    if (envFullMem2 && envFullMem2[0] != '\0') {
+        std::string fm = envFullMem2;
+        cfg.fullMem = (fm != "0" && fm != "false" && fm != "no");
+    }
+    if (envLargePages2 && envLargePages2[0] != '\0') {
+        std::string lp = envLargePages2;
+        cfg.largePages = (lp != "0" && lp != "false" && lp != "no");
+    }
+    if (envThreads2 && envThreads2[0] != '\0') cfg.threads = std::stoul(envThreads2);
+
     // Validate
     if (cfg.pools.empty()) {
             std::cerr << "[Config] No pool configured! Use -o or set in pool.cfg" << std::endl;

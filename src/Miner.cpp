@@ -59,12 +59,27 @@ void Miner::start(const MinerConfig& cfg) {
         // Light mode: ensure FULL_MEM is removed
         m_flags = static_cast<randomx_flags>(m_flags & ~RANDOMX_FLAG_FULL_MEM);
     }
-    // Explicitly enable large pages (randomx_get_flags doesn't set it)
+    if (cfg.useJIT)
+        m_flags = static_cast<randomx_flags>(m_flags | RANDOMX_FLAG_JIT);
+    if (cfg.hardAES)
+        m_flags = static_cast<randomx_flags>(m_flags | RANDOMX_FLAG_HARD_AES);
+    // Large pages: auto-detect. Try a probe allocation with LARGE_PAGES.
+    // If the kernel/container provides no hugepages (or mlock is limited)
+    // fall back to normal pages instead of failing.
     if (cfg.largePages) {
-        m_flags = static_cast<randomx_flags>(m_flags | RANDOMX_FLAG_LARGE_PAGES);
+        randomx_cache* probe = randomx_alloc_cache(
+            static_cast<randomx_flags>(m_flags | RANDOMX_FLAG_LARGE_PAGES));
+        if (probe) {
+            randomx_release_cache(probe);
+            m_flags = static_cast<randomx_flags>(m_flags | RANDOMX_FLAG_LARGE_PAGES);
+            std::cout << "[Miner] LARGE_PAGES available - enabled" << std::endl;
+        } else {
+            std::cout << "[Miner] LARGE_PAGES unavailable - falling back to normal pages"
+                      << std::endl;
+        }
+    } else {
+        std::cout << "[Miner] LARGE_PAGES disabled by config" << std::endl;
     }
-    // Enable JIT and hardware AES always for best perf
-    m_flags = static_cast<randomx_flags>(m_flags | RANDOMX_FLAG_JIT | RANDOMX_FLAG_HARD_AES);
     
     std::cout << "[Miner] RandomY flags: "
               << "JIT="         << ((m_flags & RANDOMX_FLAG_JIT) != 0)
@@ -80,10 +95,28 @@ void Miner::start(const MinerConfig& cfg) {
     if (cfg.fullMem) {
         // Full mem: cache → dataset → release cache
         m_cache = randomx_alloc_cache(m_flags);
+        if (!m_cache && (m_flags & RANDOMX_FLAG_LARGE_PAGES)) {
+            std::cerr << "[Miner] Cache alloc failed with LARGE_PAGES - retrying normal pages"
+                      << std::endl;
+            m_flags = static_cast<randomx_flags>(m_flags & ~RANDOMX_FLAG_LARGE_PAGES);
+            m_cache = randomx_alloc_cache(m_flags);
+        }
         if (!m_cache) { std::cerr << "[Miner] Cache alloc failed" << std::endl; return; }
         randomx_init_cache(m_cache, key, sizeof(key));
 
         m_dataset = randomx_alloc_dataset(m_flags);
+        if (!m_dataset && (m_flags & RANDOMX_FLAG_LARGE_PAGES)) {
+            std::cerr << "[Miner] Dataset alloc failed with LARGE_PAGES - retrying normal pages"
+                      << std::endl;
+            m_flags = static_cast<randomx_flags>(m_flags & ~RANDOMX_FLAG_LARGE_PAGES);
+            randomx_release_cache(m_cache);
+            m_cache = nullptr;
+            m_cache = randomx_alloc_cache(m_flags);
+            if (!m_cache) { std::cerr << "[Miner] Cache alloc failed" << std::endl; return; }
+            randomx_init_cache(m_cache, key, sizeof(key));
+            m_dataset = randomx_alloc_dataset(m_flags);
+        }
+        if (!m_dataset) { std::cerr << "[Miner] Dataset alloc failed" << std::endl; return; }
         if (!m_dataset) { std::cerr << "[Miner] Dataset alloc failed" << std::endl; return; }
 
         uint32_t datasetItems = randomx_dataset_item_count();
@@ -108,6 +141,12 @@ void Miner::start(const MinerConfig& cfg) {
     } else {
         // Light mode: cache only (VM will use cache for hash calculations)
         m_cache = randomx_alloc_cache(m_flags);
+        if (!m_cache && (m_flags & RANDOMX_FLAG_LARGE_PAGES)) {
+            std::cerr << "[Miner] Cache alloc failed with LARGE_PAGES - retrying normal pages"
+                      << std::endl;
+            m_flags = static_cast<randomx_flags>(m_flags & ~RANDOMX_FLAG_LARGE_PAGES);
+            m_cache = randomx_alloc_cache(m_flags);
+        }
         if (!m_cache) { std::cerr << "[Miner] Cache alloc failed" << std::endl; return; }
         randomx_init_cache(m_cache, key, sizeof(key));
         std::cout << "[Miner] Light mode — using cache (no full dataset)" << std::endl;

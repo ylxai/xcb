@@ -1,13 +1,14 @@
 # miner-saya — Core Coin (XCB) RandomY Miner
 
-Miner C++ pribadi untuk **Core Coin (XCB)** menggunakan algoritma **RandomY** (fork RandomX v1.2.1).
+Miner C++ untuk **Core Coin (XCB)** menggunakan algoritma **RandomY** (fork RandomX v1.2.1).
 Dibangun dari nol — **zero dev fee**, **zero dependensi eksternal** selain RandomY library.
 
 - **Zero dev fee** — semua hash 100% ke wallet yang dikonfigurasi, tidak ada switch wallet
-- **ETHPROXY protocol** (`eth_submitLogin` / `eth_getWork` / `eth_submitWork`) untuk pool catchthatrabbit
-- **Light mode** (256MB cache) atau **full mode** (~2.6GB dataset), JIT compiler, huge pages auto-detect
+- **Protocol robust** — single event loop, routing response by id, support `eth_getWork` polling + `mining.notify` push (ETHPROXY / stratum style), reconnect backoff otomatis
+- **Light mode** (256MB cache) atau **full mode** (~2.6GB dataset), JIT compiler, **huge pages auto-detect** (fallback otomatis)
 - **CPU affinity + nice priority** — thread di-pin per core
-- **Multi-pool config file** (`pool.cfg`) — failover otomatis antar server
+- **Multi-pool config file** (`pool.cfg`) — failover antar server
+- Flags arsitektur diambil dari `randomx_get_flags()` (ARGON2_AVX2/SSSE3) — di atas default upstream
 
 ---
 
@@ -32,8 +33,8 @@ docker run --rm -d --name xcb \
   ylxai/xcb:v1
 ```
 
-> **⚠️ Wajib di container:** `LARGE_PAGES=0` (container tanpa hugepages/mlock gagal alloc cache).
-> **Disarankan:** `FULL_MEM=0` (light, 256MB) — full mode butuh ~2.6GB RAM.
+> **Tips:** `LARGE_PAGES` kini **auto-detect** — jika huge pages tidak tersedia (mis. container tanpa mlock), miner otomatis fallback ke normal pages tanpa crash. Set `LARGE_PAGES=0` hanya untuk memaksa nonaktif.
+> `FULL_MEM=0` (light, 256MB) disarankan untuk VPS kecil — full mode butuh ~2.6GB RAM dan inisialisasi dataset ~56s.
 
 ---
 
@@ -47,8 +48,8 @@ Semua env vars dibaca langsung (precedence ≥ config file & CLI):
 | `POOL` | `sg.catchthatrabbit.com:8008` | Host pool `host:port` |
 | `WORKER` | `pool` | Nama worker (ditampilkan pool sebagai `wallet.worker`) |
 | `THREADS` | *(kosong)* | Jumlah thread. **Kosong = auto (jumlah CPU cores)** |
-| `FULL_MEM` | *(true)* | `1` = dataset full 2.6GB, `0`/`false` = light 256MB |
-| `LARGE_PAGES` | *(true)* | `1` = huge pages, **`0`/`false` wajib di container** |
+| `FULL_MEM` | `0` | `1` = dataset full 2.6GB, `0`/`false` = light 256MB |
+| `LARGE_PAGES` | *(auto)* | `1` = paksa huge pages, `0` = nonaktif, kosong = auto-detect (fallback normal pages) |
 | `LOG_SHARES` | *(false)* | `1` = print setiap share found/accepted (default quiet — pool difficulty rendah sangat noisy) |
 
 ---
@@ -105,6 +106,20 @@ light=true
 
 ---
 
+## Protocol Stratum
+
+Client protocol ditulis ulang (Fase 1) menjadi **single event loop** yang robust:
+
+- **Routing by id** — setiap respons dipetakan ke permintaan asalnya (`eth_getWork`, login, submit) atau ke notifikasi (`mining.notify`, `mining.set_difficulty`)
+- **Tidak pernah blocking** pada satu respons — `eth_getWork` polling tiap 3 detik (fire-and-forget), tidak ada window yang menelan respons share/notifikasi
+- **`mining.notify` push** didukung penuh (format 3 elemen `[header, seed, target]` dan 4 elemen `[jobid, header, seed, target]`, hex auto-detect `0x`)
+- **Tidak disconnect pada respons tak dikenal** — error/edge case hanya dicatat
+- **Reconnect backoff** eksponensial (2s → 30s) + clean shutdown
+- **`m_msgId` atomic** — aman dipakai thread network + worker bersamaan
+- Submit share memakai header job tempat share ditemukan (bukan header global terakhir)
+
+---
+
 ## Docker (Build Image Sendiri)
 
 ```bash
@@ -115,7 +130,7 @@ docker run --rm ylxai/xcb:v1
 ```
 
 Image docker **multi-stage** (builder → runtime ~32MB), jalan sebagai user non-root `miner`, entrypoint `./miner-saya`.
-`pool.cfg` ikut di-copy ke `/miner/pool.cfg` sebagai fallback.
+`pool.cfg` ikut di-copy ke `/miner/pool.cfg` sebagai fallback. Docker build tidak lagi bergantung folder `.git` submodule di build context (fallback: clone + checkout pinned commit).
 
 ---
 
@@ -178,6 +193,7 @@ Wallet disimpan sebagai **Secret** (tidak di-env image). **`THREADS` wajib = `li
 
 ## Benchmark
 
+### VPS 16 core / 8GB (full dataset)
 | Thread | Mode | Hashrate | RAM |
 |--------|------|----------|-----|
 | 1 | Light | ~68 H/s | ~256MB |
@@ -187,6 +203,14 @@ Wallet disimpan sebagai **Secret** (tidak di-env image). **`THREADS` wajib = `li
 | 16 | **Full** | **~7.9 KH/s** | ~2.6GB |
 
 > Full mode ±6x hashrate light mode (diverifikasi di VPS 16 core, 8GB RAM).
+
+### Sandbox 2-core / 4GB (aes+avx2, verifikasi live pool)
+| Thread | Mode | Hashrate | RAM | Catatan |
+|--------|------|----------|-----|---------|
+| 1 | Light | ~95 H/s | ~256MB | dataset init ~0.5s |
+| 2 | **Full** | **~1223 H/s** | ~2.6GB | dataset init ~56s; ~610 H/s/thread — **±8x light** |
+
+> Verifikasi: 815 shares accepted / 0 rejected (full, 2 thread, pool live sg.catchthatrabbit.com).
 
 ---
 
@@ -214,17 +238,29 @@ sudo chrt -rr 1 ./miner-saya
 
 ---
 
+## Roadmap
+
+- [x] **Fase 1 — Protocol rewrite**: event loop, routing by id, `mining.notify`, atomic msg id, reconnect backoff, no blocking getWork
+- [x] **LARGE_PAGES auto-detect** + honor `useJIT`/`hardAES` config
+- [x] **Fix env parsing** — env vars tidak ditimpa config file; aman terhadap string kosong
+- [ ] **Fase 2 — Correctness**: double-buffer job per worker, submit dengan header job milik share, target compare 32-byte
+- [ ] **Fase 3 — Performance**: auto FULL_MEM dari RAM, AVX-512 evaluation, benchmark vs upstream
+- [ ] **Fase 4 — Ops**: failover pool list, `eth_submitHashrate`, Docker polish
+
+---
+
 ## Troubleshooting
 
 | Gejala | Penyebab | Solusi |
 |--------|----------|--------|
-| `cache alloc failed` | Huge pages tidak tersedia di container | Set `LARGE_PAGES=0` |
-| Crash `stoul` / `Config` gagal | Env var kosong (`-e THREADS=`) | Biarkan env kosong atau isi nilai valid — versi v1 sudah menangani string kosong |
-| Cuma 1 thread padahal banyak core | Default kode lama `threads=1` | Set `THREADS=<n>` atau gunakan v1 (auto = semua cores) |
+| `cache alloc failed` | Huge pages tidak tersedia di container | Tidak perlu — v1+ auto-fallback ke normal pages; atau set `LARGE_PAGES=0` |
+| `Invalid getWork response` + disconnect loop | Client lama memblokir getWork dan menelan respons lain | Sudah diperbaiki di Fase 1 (event loop) — upgrade binary |
+| Crash `stoul` / `Config` gagal | Env var kosong (`-e THREADS=`) | Biarkan env kosong atau isi nilai valid — sudah ditangani |
+| Cuma 1 thread padahal banyak core | Default kode lama `threads=1` | Set `THREADS=<n>` atau gunakan versi terbaru (auto = semua cores) |
 | Hashrate ~50% dari harapan | Mode light (FULL_MEM=0) | `FULL_MEM=1` + RAM cukup |
-| Worker stuck (0.0x H/s) | Core sibuk/di luar cpuset provider (CPU affinity) | Cek `lscpu`/`Cpus_allowed_list`; jalankan berkali atau kurangi THREADS |
+| Worker stuck (0.0x H/s) | Core sibuk/di luar cpuset provider (CPU affinity) | Cek `lscpu`/`Cpus_allowed_list`; kurangi THREADS |
 | Build gagal `RandomY` tidak ditemukan | Submodule belum di-init | `git submodule update --init --recursive` |
-| Log kapah (ribuan share/detik) | Pool difficulty rendah + log per-share | Default v1 quiet; aktifkan verbose hanya untuk debug (`LOG_SHARES=1`) |
+| Log penuh ribuan share/detik | Pool difficulty rendah + log per-share | Default quiet; verbose hanya untuk debug (`LOG_SHARES=1`) |
 
 ---
 
@@ -243,7 +279,7 @@ xcb/
 └── src/
     ├── main.cpp             # Entrypoint + signal handler
     ├── Config.hpp/.cpp      # Config parser (env vars + file + CLI)
-    ├── StratumClient.hpp/.cpp # ETHPROXY protocol client
+    ├── StratumClient.hpp/.cpp # Protocol client — single event loop, routing by id
     ├── Miner.hpp/.cpp       # Thread pool, VM management, mining loop, stats
     └── picosha3.h           # SHA3-512 (header-only, stack-based)
 ```

@@ -39,8 +39,10 @@ private:
     bool sendFrame(const std::string& json);
     std::string recvLine(double timeoutSec);
     bool doEthLogin();
-    bool doEthGetWork();
     void handleResponse(const std::string& line);
+    void handleNotify(const std::string& line);
+    void processJob(const std::string& jobId, const std::string& header,
+                    const std::string& seed, const std::string& target);
     void reconnect();
     
     std::string m_host;
@@ -55,7 +57,10 @@ private:
     std::atomic<bool> m_running{false};
     std::mutex m_sendMutex;
     std::mutex m_recvMutex;
-    uint64_t m_msgId = 1;
+    std::atomic<uint64_t> m_msgId{1};
+    uint64_t m_pendingGetWorkId = 0;
+    uint64_t m_loginId = 0;
+    bool m_socketDead = false;
     std::string m_recvBuf;
     std::string m_currentHeader;   // hex header of current job (no 0x)
     std::string m_currentSeed;
