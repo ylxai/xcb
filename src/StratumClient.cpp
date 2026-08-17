@@ -286,10 +286,10 @@ void StratumClient::run() {
             if (m_hashrateProvider && hrElapsed >= 60) {
                 double rate = m_hashrateProvider();
                 if (rate > 0) {
-                    uint64_t rateWei = static_cast<uint64_t>(rate * 1e9);
+                    uint64_t rateHs = static_cast<uint64_t>(rate);
                     std::string hrMsg = "{\"id\":" + std::to_string(m_msgId.fetch_add(1, std::memory_order_relaxed)) +
                                         ",\"method\":\"eth_submitHashrate\",\"params\":[\"0x" +
-                                        to_hex64(rateWei) + "\",\"0x" + to_hex64(m_workerIdHex) + "\"]}";
+                                        to_hex64(rateHs) + "\",\"0x" + to_hex64(m_workerIdHex) + "\"]}";
                     sendLine(hrMsg);
                     std::cout << "[Stratum] eth_submitHashrate: " << rate << " H/s" << std::endl;
                 }

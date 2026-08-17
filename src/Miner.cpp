@@ -188,7 +188,7 @@ void Miner::start(const MinerConfig& cfg) {
     m_client->setPools(pools);
     m_client->setJobCallback([this](const Job& job) { onNewJob(job); });
     m_client->setResultCallback([this](bool ok, const std::string& msg) { onShareResult(ok, msg); });
-    m_client->setHashrateProvider([this]() { return m_lastHashrate; });
+    m_client->setHashrateProvider([this]() { return m_lastHashrate.load(std::memory_order_relaxed); });
     m_client->connect();
 
     // --- Stats printer thread ---
@@ -472,7 +472,7 @@ void Miner::printStats() const {
     for (auto& w : m_workers) total += w->totalHashes;
 
     double rate = static_cast<double>(total) / sec;
-    m_lastHashrate = rate;
+    m_lastHashrate.store(rate, std::memory_order_relaxed);
 
     std::cout << "\n=== HASHRATE ==="
               << "\n  Total:  " << rate << " H/s"
