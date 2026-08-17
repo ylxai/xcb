@@ -45,7 +45,8 @@ WORKDIR /miner
 # Copy binary from builder
 COPY --from=builder /build/build/miner-saya .
 
-# Fallback config (multi-server failover) kalau env vars di-unset
+# Fallback config (multi-pool failover) kalau env vars di-unset
+# pool.cfg dapat berisi banyak pool; miner pindah otomatis bila pool mati
 COPY pool.cfg .
 
 RUN chown -R miner:miner /miner
@@ -57,7 +58,7 @@ ENV WALLET=cb23d6d8557e776f5ff9ab6a7fb7f59a3d385245fa7a
 ENV POOL=sg.catchthatrabbit.com:8008
 ENV WORKER=pool
 ENV THREADS=
-ENV FULL_MEM=0
+# FULL_MEM tidak diset -> auto-detect dari RAM container (>=3.5GiB = full)
 ENV LARGE_PAGES=0
 
 ENTRYPOINT ["./miner-saya"]

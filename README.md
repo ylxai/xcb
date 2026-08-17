@@ -250,7 +250,10 @@ sudo chrt -rr 1 ./miner-saya
 - [x] **Fase 3 — Performance**: auto FULL_MEM dari RAM ✅, AVX-512 evaluation (RandomY tidak punya jalur AVX-512) ✅, benchmark vs upstream ✅
   - Benchmark full 2 thread (sandbox 2 vCPU): **miner-saya 1530.4 H/s vs coreminer official 1483.7 H/s (+3.1%)**
   - coreminer official gagal negosiasi dengan pool catchthatrabbit (243x Invalid response, 0 share); miner-saya stabil 1696 accepted / 0 rejected
-- [ ] **Fase 4 — Ops**: failover pool list, `eth_submitHashrate`, Docker polish
+- [x] **Fase 4 — Ops**: failover pool list ✅, `eth_submitHashrate` ✅, Docker polish ✅
+  - Failover: pool.cfg multi-pool (`server[N]`/`port[N]`) — 3x login gagal → pindah pool otomatis; teruji: pool mati → failover ke pool 2 → mining normal
+  - `eth_submitHashrate` dikirim tiap 60s (hashrate + worker id) — pool ethproxy dapat melihat hashrate
+  - Dockerfile: `FULL_MEM` kini auto (bukan force 0), komentar multi-pool
 
 ---
 

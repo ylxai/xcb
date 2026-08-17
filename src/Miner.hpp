@@ -28,6 +28,7 @@ public:
     void stop();
     bool isRunning() const;
     void printStats() const;
+    mutable double m_lastHashrate = 0;   // di-update printStats utk eth_submitHashrate
 
 private:
     void initDataset();

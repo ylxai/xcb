@@ -113,6 +113,42 @@ StratumClient::StratumClient(const std::string& host, uint16_t port,
     : m_host(host), m_port(port), m_wallet(wallet),
       m_worker(worker), m_password(password) {
     m_workerName = wallet + "." + worker;
+    PoolInfo pi;
+    pi.host = host; pi.port = port; pi.wallet = wallet;
+    pi.worker = worker; pi.password = password;
+    m_pools.push_back(pi);
+    uint64_t h = 1469598103934665603ULL;
+    for (char c : m_workerName) { h ^= static_cast<uint8_t>(c); h *= 1099511628211ULL; }
+    m_workerIdHex = h;
+}
+
+void StratumClient::setPools(const std::vector<PoolInfo>& pools) {
+    if (pools.empty()) return;
+    m_pools = pools;
+    m_poolIndex = 0;
+    applyPool(0);
+}
+
+void StratumClient::applyPool(size_t idx) {
+    if (idx >= m_pools.size()) return;
+    m_poolIndex = idx;
+    const PoolInfo& pi = m_pools[idx];
+    m_host = pi.host;
+    m_port = pi.port;
+    m_wallet = pi.wallet;
+    m_worker = pi.worker;
+    m_password = pi.password;
+    m_workerName = m_wallet + "." + m_worker;
+}
+
+void StratumClient::switchToNextPool() {
+    if (m_pools.size() <= 1) return;
+    size_t next = (m_poolIndex + 1) % m_pools.size();
+    applyPool(next);
+    m_connectFails = 0;
+    std::cout << "[Stratum] Failover ke pool " << (m_poolIndex + 1)
+              << "/" << m_pools.size() << ": " << m_host << ":" << m_port
+              << std::endl;
 }
 
 StratumClient::~StratumClient() { disconnect(); }
@@ -198,6 +234,13 @@ void StratumClient::connect() {
     m_thread = std::thread(&StratumClient::run, this);
 }
 
+static std::string to_hex64(uint64_t v) {
+    const char* d = "0123456789abcdef";
+    std::string out(16, '0');
+    for (int i = 15; i >= 0; i--) { out[i] = d[v & 0xf]; v >>= 4; }
+    return out;
+}
+
 void StratumClient::run() {
     int reconnectDelay = 2;
 
@@ -207,20 +250,27 @@ void StratumClient::run() {
 
         // Step 1: eth_submitLogin (blocking, before event loop)
         if (!doEthLogin()) {
+            m_connectFails++;
             std::cerr << "[Stratum] Login failed, reconnecting in " << reconnectDelay << "s"
                       << std::endl;
             std::this_thread::sleep_for(std::chrono::seconds(reconnectDelay));
             reconnectDelay = std::min(reconnectDelay * 2, 30);
+            if (m_connectFails >= 3 && m_pools.size() > 1) {
+                switchToNextPool();
+                reconnectDelay = 2;
+            }
             reconnect();
             continue;
         }
         reconnectDelay = 2;
+        m_connectFails = 0;
         std::cout << "[Stratum] Authorized as " << m_workerName << std::endl;
 
         // Step 2: single event loop — poll socket, route every line by id,
         // and issue eth_getWork on a timer. Never block on a single response,
         // never disconnect because of an unexpected line.
         auto lastPoll = std::chrono::steady_clock::now() - std::chrono::seconds(10);
+        auto lastHrReport = std::chrono::steady_clock::now() - std::chrono::seconds(61);
         bool needJob = true;
 
         while (m_running && !m_socketDead) {
@@ -232,6 +282,19 @@ void StratumClient::run() {
             if (m_socketDead) break;
 
             auto now = std::chrono::steady_clock::now();
+            auto hrElapsed = std::chrono::duration_cast<std::chrono::seconds>(now - lastHrReport).count();
+            if (m_hashrateProvider && hrElapsed >= 60) {
+                double rate = m_hashrateProvider();
+                if (rate > 0) {
+                    uint64_t rateWei = static_cast<uint64_t>(rate * 1e9);
+                    std::string hrMsg = "{\"id\":" + std::to_string(m_msgId.fetch_add(1, std::memory_order_relaxed)) +
+                                        ",\"method\":\"eth_submitHashrate\",\"params\":[\"0x" +
+                                        to_hex64(rateWei) + "\",\"0x" + to_hex64(m_workerIdHex) + "\"]}";
+                    sendLine(hrMsg);
+                    std::cout << "[Stratum] eth_submitHashrate: " << rate << " H/s" << std::endl;
+                }
+                lastHrReport = now;
+            }
             auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - lastPoll).count();
             if (needJob || elapsed >= 3) {
                 uint64_t id = m_msgId.fetch_add(1, std::memory_order_relaxed);
